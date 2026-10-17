@@ -5,6 +5,7 @@ import { ModuleLayout } from "./module-layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ServiceComplaintsRadar } from "./service/service-complaints-radar"
+import { TicketDesk } from "./service/ticket-desk"
 import {
   BarChart,
   Bar,
@@ -18,7 +19,7 @@ import {
   Pie,
   Cell,
 } from "recharts"
-import { Headset, Clock, CheckCircle, AlertCircle, Radio, RefreshCw } from "lucide-react"
+import { Headset, Clock, CheckCircle, AlertCircle, Radio, RefreshCw, Ticket } from "lucide-react"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import { tileLabel, type Loadable } from "@/lib/service-state"
 import { loadCommTasks, loadEscalations, useOps } from "@/lib/ops-api"
@@ -72,7 +73,7 @@ const NOT_CONNECTED_TILE = "Not connected"
 const tile = (l: Loadable<unknown>, value: () => string) => (l.state === "ready" ? value() : (tileLabel(l) ?? "—"))
 
 export function ServiceModule() {
-  const [activeTab, setActiveTab] = useState<"operations" | "scheduling" | "complaints">("operations")
+  const [activeTab, setActiveTab] = useState<"desk" | "operations" | "scheduling" | "complaints">("desk")
   const escalations = useOps(loadEscalations)
   const commTasks = useOps(loadCommTasks)
 
@@ -155,13 +156,22 @@ export function ServiceModule() {
       <div className="flex flex-wrap items-center justify-between border-b border-border/80 pb-3 gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Button
+            variant={activeTab === "desk" ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-2 text-xs font-semibold"
+            onClick={() => setActiveTab("desk")}
+          >
+            <Ticket className="h-3.5 w-3.5" />
+            Ticket Desk
+          </Button>
+          <Button
             variant={activeTab === "operations" ? "default" : "outline"}
             size="sm"
             className="h-8 gap-2 text-xs font-semibold"
             onClick={() => setActiveTab("operations")}
           >
             <Headset className="h-3.5 w-3.5" />
-            Service Operations & Tickets
+            Operations & Escalations
           </Button>
           <Button
             variant={activeTab === "scheduling" ? "default" : "outline"}
@@ -198,7 +208,10 @@ export function ServiceModule() {
         </div>
       </div>
 
-      {/* Tab 1: Service Operations & Tickets */}
+      {/* Tab 0: unified ticket desk (support service; every source lands here) */}
+      {activeTab === "desk" && <TicketDesk />}
+
+      {/* Tab 1: Service Operations & Escalations (communication service) */}
       {activeTab === "operations" && !settled && (
         <div className="space-y-4" aria-busy="true" aria-label="Loading service data">
           <div className="h-16 animate-pulse rounded-lg bg-muted/50" />

@@ -455,6 +455,19 @@ async def end_session(session_id: uuid.UUID, payload: CallSessionEnd, tenant_id:
     session.notes = payload.notes
     await db.flush()
     await db.refresh(session)
+    if str(payload.outcome or "").upper() == "CALLBACK":
+        # The agent promised to call back: becomes a ticket so it is not forgotten (support/ticket_rules.py).
+        try:
+            from services.common.event_bus import publish
+            async with db.begin_nested():
+                await publish(db, tenant_id, "callcenter.callback.requested",
+                              {"callback_id": str(session.id), "call_id": str(session.id),
+                               "customer_id": str(session.customer_id) if getattr(session, "customer_id", None) else None,
+                               "note": (payload.notes or "")[:300]},
+                              source="call_center", subject=("call", session.id),
+                              idempotency_key=f"callback:{session.id}")
+        except Exception as exc:  # noqa: BLE001 - never fail ending the call over a ticket
+            logger.warning("could not publish callback request: %s", type(exc).__name__)
     return _session_to_dict(session)
 
 

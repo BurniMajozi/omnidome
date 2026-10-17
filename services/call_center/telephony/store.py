@@ -165,6 +165,20 @@ class DbStore:
             await db.commit()
             return row.id
 
+    async def publish_missed_call(self, tenant_id, call_id, number: str, direction: str, outcome: str, reason: str) -> None:
+        """An inbound call nobody answered becomes a support ticket (services/support/ticket_rules.py). The caller's
+        number is never put on the bus: only a stable hash (to fold repeat callers into one ticket) and the last digits."""
+        import hashlib
+        from services.common.event_bus import publish
+        digits = "".join(ch for ch in str(number or "") if ch.isdigit())
+        payload = {"call_id": str(call_id), "direction": direction, "outcome": outcome, "reason": reason,
+                   "caller_ref": hashlib.sha256(digits.encode()).hexdigest()[:16] if digits else None,
+                   "caller_hint": ("…" + digits[-3:]) if len(digits) >= 3 else None}
+        async with self._factory() as db:
+            await publish(db, tenant_id, "callcenter.call.missed", payload, source="call_center",
+                          subject=("call", call_id), idempotency_key=f"call-missed:{call_id}")
+            await db.commit()
+
     async def update_audit(self, tenant_id, audit_id, result, session_id=None) -> None:
         async with self._factory() as db:
             row = (await db.execute(select(TelephonyAudit).where(

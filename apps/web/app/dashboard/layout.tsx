@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase/client"
 import { AUTH_DISABLED } from "@/lib/flags"
 import { sanitizeNextUrl } from "@/lib/supabase/redirect"
+import { AgentRunHost } from "@/components/chat/agent-run-host"
 
 export default function DashboardLayout({
   children,
@@ -65,5 +66,10 @@ export default function DashboardLayout({
     )
   }
 
-  return <>{children}</>
+  return (
+    <>
+      {children}
+      <AgentRunHost />
+    </>
+  )
 }

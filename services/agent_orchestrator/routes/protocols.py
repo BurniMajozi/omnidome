@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 
-from services.agent_orchestrator import skills_runtime
+from services.agent_orchestrator import run_registry, skills_runtime
 from services.agent_orchestrator.agents import Agent
 from services.agent_orchestrator.config import settings
 from services.agent_orchestrator.protocols import (
@@ -249,7 +249,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
                 conversation_id=str(conv_uuid),
-                data={"agent_type": body.agent_type, "correlation_id": correlation,
+                data={"agent_type": body.agent_type, "correlation_id": correlation, "message": body.message[:4000],
                       "kpi_status": safe_context.get("kpi_status", "not_linked")},
             ))
             agent = Agent(
@@ -301,20 +301,23 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 finally:
                     if not task.done(): task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-                for tc in run_result.get("tool_calls", []):
+                for n, tc in enumerate(run_result.get("tool_calls", [])):
+                    tc_id = str(tc.get("id") or f"tc-{n}")
                     yield await emit(AGUIEvent(
                         type="TOOL_CALL_START",
                         run_id=run_id,
                         tenant_id=ctx.tenant_id,
                         conversation_id=str(conv_uuid),
-                        data={"name": tc.get("name"), "arguments": tc.get("arguments")},
+                        data={"tool_call_id": tc_id, "tool_name": tc.get("name"), "name": tc.get("name"),
+                              "arguments": tc.get("arguments")},
                     ))
                     yield await emit(AGUIEvent(
                         type="TOOL_CALL_RESULT",
                         run_id=run_id,
                         tenant_id=ctx.tenant_id,
                         conversation_id=str(conv_uuid),
-                        data={"name": tc.get("name"), "result": tc.get("result")},
+                        data={"tool_call_id": tc_id, "tool_name": tc.get("name"), "name": tc.get("name"),
+                              "result": tc.get("result")},
                     ))
                 full_content = run_result.get("content", "")
                 if full_content:
@@ -401,7 +404,39 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 data={"error": str(exc)},
             ))
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    # The run is owned by the backend: it keeps going if the browser navigates away, and any client can
+    # re-attach (GET /ag-ui/runs/{run_id}/events) and replay what it missed.
+    record = run_registry.create(run_id, ctx.tenant_id, ctx.user_id, conv_uuid, body.agent_type, body.message)
+    run_registry.spawn(record, stream())
+    return StreamingResponse(record.follow(0), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/api/protocols/ag-ui/runs")
+async def ag_ui_runs(conversation_id: Optional[uuid.UUID] = None, ctx: AuthContext = Depends(get_auth_context)):
+    """The caller's recent runs (running first), so a client can re-attach after navigation or reload."""
+    runs = run_registry.list_for(ctx.tenant_id, ctx.user_id, conversation_id)
+    runs.sort(key=lambda r: (r.done, -r.started))
+    return {"data": [r.summary() for r in runs]}
+
+
+@router.get("/api/protocols/ag-ui/runs/{run_id}/events")
+async def ag_ui_run_events(run_id: uuid.UUID, after: int = Query(0, ge=0), ctx: AuthContext = Depends(get_auth_context)):
+    record = run_registry.get(run_id, ctx.tenant_id, ctx.user_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Run not found or no longer retained")
+    return StreamingResponse(record.follow(after), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/api/protocols/ag-ui/runs/{run_id}/cancel")
+async def ag_ui_run_cancel(run_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
+    record = run_registry.get(run_id, ctx.tenant_id, ctx.user_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Run not found or no longer retained")
+    if record.task and not record.done:
+        record.task.cancel()
+    return {"run_id": str(run_id), "status": "cancelling" if not record.done else record.status}
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,8 @@ class MemoryStore(KnowledgeStore):
                 continue
             if flt.source_types and c.source_type not in flt.source_types:
                 continue
+            if c.source_type in flt.excluded():
+                continue
             if flt.tags and not set(flt.tags) & set(c.tags):
                 continue
             if flt.since and (c.as_of is None or c.as_of < flt.since):

@@ -4,12 +4,24 @@ EVENT_LABELS = {
  "iot.support.requested":"HomeDome: support access requested",
  "iot.gateway.activated":"HomeDome: home gateway activated", "iot.integration.connected":"HomeDome: integration connected",
  "portal.cart.abandoned":"Portal: basket abandoned", "portal.quote.requested":"Portal: quote requested", "portal.registration.inactive":"Portal: registration inactive",
+ "email.received":"Email: message received", "email.sent":"Email: reply sent", "email.send_failed":"Email: send failed",
+ "email.delivery_failed":"Email: bounced or rejected", "email.thread_status_changed":"Email: conversation status changed",
  "sales.lead.created":"Sales: lead created", "sales.lead.stage_changed":"Sales: lead stage changed", "sales.lead.assigned":"Sales: lead assigned",
  "sales.lead.escalated":"Sales: lead escalated", "sales.lead.email_requested":"Sales: lead email requested", "sales.lead.outbound_requested":"Sales: outbound requested",
  "sales.lead.campaign_requested":"Sales: campaign requested", "sales.deal.stage_changed":"Sales: deal stage changed", "sales.deal.won":"Sales: deal won", "sales.deal.lost":"Sales: deal lost",
  "platform.billing.credits.low":"Platform billing: credits low", "platform.billing.credits.exhausted":"Platform billing: credit limit reached",
  "platform.billing.credits.topped_up":"Platform billing: credits topped up", "platform.billing.subscription.payment_failed":"Platform billing: payment failed",
  "platform.billing.plan.activated":"Platform billing: plan activated", "platform.billing.payment.review":"Platform billing: payment review",
+ # Ticketing (services/support): lifecycle events published by the support service, and the source events it turns into tickets.
+ "support.ticket.created":"Support: ticket created", "support.ticket.repeated":"Support: ticket occurred again",
+ "support.ticket.closed":"Support: ticket closed", "support.ticket.reopened":"Support: ticket reopened",
+ "support.ticket.assigned":"Support: ticket assigned",
+ "email.received":"Email: message received", "email.send_failed":"Email: send failed", "email.delivery_failed":"Email: bounced",
+ "agents.run.failed":"Agents: run failed", "agents.approval.requested":"Agents: approval requested",
+ "callcenter.call.missed":"Call centre: missed call", "callcenter.callback.requested":"Call centre: callback requested",
+ "finance.payment.failed":"Finance: customer payment failed", "finance.reconciliation.exception":"Finance: reconciliation exception",
+ "iot.gateway.failed":"HomeDome: gateway failed", "iot.integration.failed":"HomeDome: integration failed",
+ "system.error.raised":"System: uncaught service error", "system.job.failed":"System: background job failed",
 }
 NODE_TYPES = {"trigger", "agent_invoke", "http_request", "notification", "transform", "condition", "end"}
 

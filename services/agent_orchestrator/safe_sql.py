@@ -41,6 +41,7 @@ DEFAULT_ALLOWLIST: Set[str] = {
     "customers",
     "invoices",
     "tickets",
+    "ticket_event_log",     # the lifecycle of every ticket: when it was assigned, changed, transferred, resolved
     "subscriptions",
     "payments",
     "lead_activities",
@@ -53,9 +54,9 @@ AGENT_TABLE_ALLOWLISTS: Dict[str, Set[str]] = {
     "executive": DEFAULT_ALLOWLIST,
     "analytics": DEFAULT_ALLOWLIST,
     "sales": {"deals", "leads", "contacts", "customers", "lead_activities", "lead_tasks"},
-    "support": {"tickets", "contacts", "customers"},
+    "support": {"tickets", "ticket_event_log", "contacts", "customers"},
     "billing": {"invoices", "payments", "subscriptions", "contacts", "customers"},
-    "retention": {"deals", "leads", "customers", "invoices", "subscriptions", "tickets"},
+    "retention": {"deals", "leads", "customers", "invoices", "subscriptions", "tickets", "ticket_event_log"},
 }
 
 # Functions that read the server, run SQL given as a string (and so bypass the

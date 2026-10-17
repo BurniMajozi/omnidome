@@ -9,7 +9,7 @@ Rules every builder follows:
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from services.tenant_memory.knowledge.cards.base import (
@@ -25,7 +25,13 @@ LEAD_FIELDS = ("id", "source", "first_name", "last_name", "coverage_area", "inte
 DEAL_FIELDS = ("id", "contact_id", "lead_id", "name", "stage_name", "probability", "value_zar", "status", "close_date",
                "closed_at", "close_reason", "notes", "created_at", "updated_at")
 TICKET_FIELDS = ("id", "customer_id", "subject", "description", "priority", "status", "category", "is_fcr",
-                 "resolution_notes", "resolved_at", "created_at", "updated_at")
+                 "resolution_notes", "resolved_at", "created_at", "updated_at",
+                 # unified ticketing (services/support): where it came from, repeats, routing
+                 "ticket_no", "source", "queue", "occurrence_count", "last_occurrence_at", "source_ref_type",
+                 "source_ref_id", "event_type",
+                 # time dimension (services/support/lifecycle.py): who has it, when it is due, how it has been handled
+                 "assigned_to", "sla_due_at", "first_response_at", "first_assigned_at", "last_activity_at", "escalated_at",
+                 "assignment_count", "modification_count", "transfer_count", "reopen_count", "reply_channel")
 CAMPAIGN_FIELDS = ("id", "name", "channel", "status", "description", "budget_zar", "start_date", "end_date",
                    "audience_segment_id", "total_sent", "total_delivered", "total_opened", "total_clicked",
                    "total_conversions", "updated_at")
@@ -177,14 +183,72 @@ def billing_digest(month: str, segment: str, agg: dict, as_of: Optional[datetime
 
 # ── Support ────────────────────────────────────────────────────────────────
 
-def ticket_card(row: dict, replies: list[dict], as_of: Optional[datetime]) -> Card:
+_CLOSED = {"RESOLVED", "CLOSED"}
+
+
+def _hours(a: Any, b: Any) -> Optional[float]:
+    if not isinstance(a, datetime) or not isinstance(b, datetime):
+        return None
+    a = a if a.tzinfo else a.replace(tzinfo=timezone.utc)
+    b = b if b.tzinfo else b.replace(tzinfo=timezone.utc)
+    return round((b - a).total_seconds() / 3600.0, 1) if b >= a else None
+
+
+def _event_line(e: dict) -> str:
+    """One lifecycle event as a line. Internal notes are never quoted: only customer-visible ones carry their text."""
+    et = str(e.get("event_type") or "")
+    who = str(e.get("actor_type") or "system")
+    frm, to = scrub(e.get("from_value")), scrub(e.get("to_value"))
+    detail = {
+        "created": f"opened as {to or 'OPEN'}", "assigned": "assigned to a team member", "reassigned": "reassigned to another team member",
+        "unassigned": "released back to the queue", "transferred": f"moved queue {frm or 'none'} to {to}",
+        "modified": f"changed {frm or 'none'} to {to}", "status_changed": f"status {frm} to {to}", "escalated": "escalated",
+        "resolved": "resolved", "closed": "closed", "reopened": "reopened", "sla_breached": "passed its deadline while open",
+        "repeated": f"problem occurred again (occurrence {to})", "note_added": "internal note added",
+        "reply_sent": "customer-visible reply sent", "customer_notified": f"requester notified ({e.get('channel') or 'no channel'})",
+        "jev_suggested": f"Jev suggested {to}", "jev_applied": f"Jev applied {to}", "jev_review": f"Jev review of the resolution: {to}",
+    }.get(et, et.replace("_", " "))
+    line = f"- {_ago(e.get('created_at'))} [{who}] {detail}"
+    if e.get("note") and str(e.get("visibility")) == "public":
+        line += f": {clip(scrub(e['note']), 160)}"
+    return line
+
+
+def ticket_card(row: dict, replies: list[dict], as_of: Optional[datetime], events: Optional[list[dict]] = None,
+                assignee_name: Optional[str] = None) -> Card:
     r = pick(row, allowed_fields("ticket", TICKET_FIELDS))
     tid = str(r["id"])
+    now = datetime.now(timezone.utc)
+    is_open = str(r.get("status") or "").upper() not in _CLOSED
+    due = r.get("sla_due_at")
+    overdue = bool(is_open and isinstance(due, datetime) and (due if due.tzinfo else due.replace(tzinfo=timezone.utc)) < now)
     lines = [f"# Ticket: {clip(scrub(r.get('subject')), 140)}", "",
              f"- Status: {r.get('status')}  |  Priority: {r.get('priority')}  |  Category: {r.get('category') or 'uncategorised'}",
              f"- Opened: {_ago(r.get('created_at'))}"
              + (f"  |  Resolved: {fmt_dt(r['resolved_at'])}" if r.get("resolved_at") else ""),
              f"- First-contact resolution: {'yes' if r.get('is_fcr') else 'no'}"]
+    if r.get("source"):
+        lines.append(f"- Raised from: {str(r['source']).replace('_', ' ')}"
+                     + (f"  |  Queue: {r['queue']}" if r.get("queue") else "")
+                     + (f"  |  Ref: {r['source_ref_type']} {clip(scrub(r.get('source_ref_id')), 60)}" if r.get("source_ref_type") else ""))
+    if int(r.get("occurrence_count") or 1) > 1:
+        lines.append(f"- Occurred {int(r['occurrence_count'])} times, last {_ago(r.get('last_occurrence_at'))} (repeats are folded into this ticket)")
+    # Time dimension: who has it, the deadline, how quickly it was picked up, and how much it has been passed around.
+    if "assigned_to" in r or "assignment_count" in r:
+        lines.append(f"- Assigned to: {clip(scrub(assignee_name), 60) or 'a team member'}" if r.get("assigned_to") else "- Assigned to: nobody (unassigned)")
+        if isinstance(due, datetime):
+            lines.append(f"- Resolution deadline: {fmt_dt(due)}" + ("  |  PAST DEADLINE when indexed" if overdue else ""))
+        resp = _hours(r.get("created_at"), r.get("first_response_at"))
+        lines.append(f"- First response: {resp} h after opening" if resp is not None
+                     else ("- First response: none yet" if is_open else "- First response: never recorded"))
+        res_h = _hours(r.get("created_at"), r.get("resolved_at"))
+        if res_h is not None:
+            lines.append(f"- Time to resolve: {res_h} h")
+        if r.get("last_activity_at") and is_open:
+            lines.append(f"- Last activity: {fmt_dt(r['last_activity_at'])}")
+        lines.append(f"- Handling: {int(r.get('assignment_count') or 0)} assignment(s), {int(r.get('transfer_count') or 0)} queue transfer(s), "
+                     f"{int(r.get('modification_count') or 0)} change(s), {int(r.get('reopen_count') or 0)} reopen(s)"
+                     + (f"  |  Escalated {fmt_dt(r['escalated_at'])}" if r.get("escalated_at") else ""))
     edges = []
     if r.get("customer_id"):
         lines.append(f"- Customer: {link('customer', str(r['customer_id']))}")
@@ -196,13 +260,69 @@ def ticket_card(row: dict, replies: list[dict], as_of: Optional[datetime]) -> Ca
         lines += ["", "## Conversation (public replies)"]
         for x in sorted(public, key=lambda x: (str(x.get("created_at")), str(x.get("id"))))[:6]:
             lines.append(f"- {_ago(x.get('created_at'))} {x.get('author_type')}: {clip(scrub(x.get('message')), 280)}")
+    if events:
+        lines += ["", "## What has happened to this ticket (oldest first)"]
+        lines += [_event_line(e) for e in sorted(events, key=lambda e: (str(e.get("created_at")), str(e.get("id"))))[-12:]]
     if r.get("resolution_notes"):
         lines += ["", "## Resolution", clip(scrub(r["resolution_notes"]), 500)]
-    md = frontmatter("ticket", tid, "support", as_of, ["ticket", str(r.get("status") or "").lower(), str(r.get("category") or "general").lower()],
-                     {"ticket_id": tid}) + "\n".join(lines) + "\n"
-    imp = IMPORTANCE["high"] if str(r.get("priority")).upper() in {"HIGH", "URGENT"} else IMPORTANCE["normal"]
+    tags = ["ticket", str(r.get("status") or "").lower(), str(r.get("category") or "general").lower(), str(r.get("source") or "manual").lower()]
+    if overdue:
+        tags.append("overdue")
+    if is_open and "assigned_to" in r and not r.get("assigned_to"):
+        tags.append("unassigned")
+    md = frontmatter("ticket", tid, "support", as_of, tags, {"ticket_id": tid}) + "\n".join(lines) + "\n"
+    imp = IMPORTANCE["high"] if str(r.get("priority")).upper() in {"HIGH", "URGENT"} or overdue else IMPORTANCE["normal"]
     return Card("ticket", tid, "support", f"Ticket {clip(scrub(r.get('subject')), 80)}", md, as_of, ["ticket"], imp,
-                {"deep_link": f"/dashboard/support?ticket={tid}"}, edges)
+                {"deep_link": f"/dashboard?section=service&ticket={tid}"}, edges)
+
+
+def _h(v: Any) -> str:
+    """Hours for the digest: whole numbers from 10 up, one decimal below ("5 h", "1.5 h"), so small drift does not change the card."""
+    if v is None:
+        return "n/a"
+    return f"{float(v):.0f} h" if float(v) >= 10 else f"{float(v):.1f}".rstrip("0").rstrip(".") + " h"
+
+
+def ticket_digest(d: dict, as_of: Optional[datetime]) -> Card:
+    """The ticket desk as it stands: what is open, late and unassigned, who is carrying what, and how fast the team is.
+    `d` is computed in SQL by the source. Hours are rounded so an unchanged desk produces an unchanged card."""
+    n, k = d["now"], d["kpi"]
+    lines = ["# Ticket desk status", "",
+             "A snapshot of the support desk as of the card date. For exact or historical numbers use governed queries.", "",
+             "## Right now",
+             f"- Open tickets: {n['open']}  |  Unassigned: {n['unassigned']}  |  Escalated: {n['escalated']}",
+             f"- Past their deadline: {n['overdue']}  |  No activity for too long (stale): {n['stale']}",
+             "", f"## How the team is doing (tickets opened in the last {d['days']} days)",
+             f"- Opened {k['opened']}, resolved {k['resolved']}, still open {k['still_open']}",
+             f"- Mean time to first response: {_h(k['mean_respond'])}  |  to assignment: {_h(k['mean_assign'])}  |  to resolution: {_h(k['mean_resolve'])}",
+             f"- First-touch resolution: {_rate(k['first_touch'], k['resolved'])}  |  Resolved within deadline: {_rate(k['sla_met'], k['sla_judged'])}"]
+    if d["stages"]:
+        lines += ["", "## Average time spent in each stage"] + [f"- {s['status'].replace('_', ' ').title()}: {_h(s['avg_hours'])} ({s['tickets']} tickets)" for s in d["stages"]]
+    if d["queues"]:
+        lines += ["", "## Open work by queue"] + [f"- {q['queue']}: {q['open']} open, {q['overdue']} past deadline, {q['unassigned']} unassigned" for q in d["queues"]]
+    if d["people"]:
+        lines += ["", "## Who is carrying what"]
+        for p in d["people"]:
+            lines.append(f"- {clip(scrub(p['name']), 50) or 'a team member'}: {p['open']} open ({p['overdue']} past deadline), resolved {p['resolved']} in {d['days']} days"
+                         + (f", mean time to resolve {_h(p['mean_resolve'])}" if p.get("mean_resolve") is not None else ""))
+    edges = []
+    if d["late"]:
+        lines += ["", "## Late or stale tickets, worst first"]
+        for t in d["late"]:
+            ref = f"T-{t['ticket_no']}" if t.get("ticket_no") else str(t["id"])[:8]
+            why = (f"{_h(t['hours_overdue'])} past deadline" if t["hours_overdue"] > 0 else f"idle {_h(t['hours_idle'])}")
+            who = clip(scrub(t.get("assignee")), 40) or "unassigned"
+            lines.append(f"- {ref} {clip(scrub(t.get('subject')), 90)} ({t['priority']}, {t['status'].replace('_', ' ').lower()}, {t.get('queue') or 'no queue'}, {who}): {why} {link('ticket', str(t['id']))}")
+            edges.append(Edge("ticket_digest", "desk", "ticket", str(t["id"]), "late", 1.0, as_of))
+    if d["flagged"]:
+        lines += ["", "## Closed tickets Jev flagged as possibly not properly resolved (last 14 days)"]
+        for t in d["flagged"]:
+            ref = f"T-{t['ticket_no']}" if t.get("ticket_no") else str(t["id"])[:8]
+            lines.append(f"- {ref} {clip(scrub(t.get('subject')), 90)} {link('ticket', str(t['id']))}")
+    md = frontmatter("ticket_digest", "desk", "support", as_of, ["support", "digest", "tickets", "late", "kpi"], {}) + "\n".join(lines) + "\n"
+    imp = IMPORTANCE["high"] if n["overdue"] else IMPORTANCE["normal"]
+    return Card("ticket_digest", "desk", "support", "Ticket desk status", md, as_of, ["support", "digest"], imp,
+                {"deep_link": "/dashboard?section=service"}, edges)
 
 
 # ── Marketing ──────────────────────────────────────────────────────────────

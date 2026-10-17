@@ -236,6 +236,10 @@ class Agent:
         if "artifacts.find" in self.available_tool_names and artifacts.ARTIFACT_POLICY not in self.skills_prompt:
             self.skills_prompt = "\n\n".join(x for x in (self.skills_prompt, artifacts.ARTIFACT_POLICY) if x)
 
+        # Every internal agent must deliver documents the same way: the chat lifts fenced blocks into the canvas.
+        if self.agent_type != "customer_facing" and artifacts.DELIVERABLE_NOTE not in self.skills_prompt:
+            self.skills_prompt = "\n\n".join(x for x in (self.skills_prompt, artifacts.DELIVERABLE_NOTE) if x)
+
         memory_block = await steps.track("memory", "Recalling team memory", self.recall_memory(user_message))
         self.context["_memory_recalled"] = bool(memory_block)
         knowledge_block = await steps.track("knowledge", "Searching company memory (RAG)", self.ground_knowledge(user_message),

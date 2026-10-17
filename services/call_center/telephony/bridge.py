@@ -413,6 +413,14 @@ class TelephonyBridge:
                 "ABANDONED" if call.direction == "INBOUND" else "NO_ANSWER")
             await self._end_call(call, outcome, "hangup")
 
+    async def _publish_missed(self, call: CallState, outcome: str, reason: str) -> None:
+        """Raise a support ticket for an unanswered inbound call (support/ticket_rules.py). Never lets bookkeeping
+        interfere with tearing the call down."""
+        try:
+            await self.store.publish_missed_call(call.tenant_id, call.id, call.number, call.direction, outcome, reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not publish missed call %s: %s", call.id, type(exc).__name__)
+
     async def _end_call(self, call: CallState, outcome: str, reason: str) -> None:
         if call.state == "ended":
             return
@@ -433,6 +441,8 @@ class TelephonyBridge:
             await self.store.finish_session(call.tenant_id, call.session_id, outcome, duration)
         elif call.direction == "INBOUND":
             await self.store.audit(call.tenant_id, "inbound", f"missed:{reason}", to_number=call.number)
+        if call.direction == "INBOUND" and not was_connected:
+            await self._publish_missed(call, outcome, reason)
         for aid in {a for a in (call.agent_id, call.xfer_agent_id) if a}:
             await self.store.set_agent_status(call.tenant_id, aid, "IDLE", only_if="ON_CALL")
         for c in list(self._chan):

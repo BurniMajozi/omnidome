@@ -26,6 +26,8 @@ KNOWN_TOOLS: dict[str, tuple[bool, bool]] = {
     "hr.get_employee": (False, False), "hr.get_wellness_insights": (False, False),
     "hr.list_employees": (False, False), "hr.list_leave_requests": (False, False),
     "knowledge.context": (False, False), "knowledge.search": (False, False),
+    "email.search": (False, False), "email.list_threads": (False, False), "email.get_thread": (False, False),
+    "email.draft_reply": (True, False), "email.send_reply": (True, True),
     "memory.recall": (False, False), "memory.upsert_summary": (True, False),
     "memory.working.get": (False, False), "memory.working.put": (False, False), "memory.write_entry": (True, False),
     "metrics.facts": (False, False),

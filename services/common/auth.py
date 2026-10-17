@@ -203,6 +203,7 @@ async def get_auth_context(request: Request) -> AuthContext:
         ctx.tenant_id = override_id
 
     set_tenant_context(ctx.tenant_id)
+    request.state.tenant_id = ctx.tenant_id  # verified identity, read by the error-ticket hook
     request.state.auth = ctx
     return ctx
 

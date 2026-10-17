@@ -44,6 +44,14 @@ ARTIFACT_POLICY = (
     "match, say so plainly and offer to create it."
 )
 
+DELIVERABLE_NOTE = (
+    "DELIVERABLES: when your answer is a document, report, table, plan, email draft, SQL or code (anything the "
+    "user will copy, edit or reuse), put it in ONE fenced code block with a filename tag, e.g. "
+    "```markdown:pipeline_summary.md ... ``` (```html:page.html for a page, ```sql:query.sql for SQL). The chat "
+    "opens that block in the artifact canvas beside the conversation. Keep the prose around it to 1-3 sentences. "
+    "Short conversational answers stay plain text."
+)
+
 _LOOKUP_VERB = re.compile(
     r"\b(do (we|you|i) have|have (we|you) got|is there|are there|find|locate|look(ing)? for|open|show me|pull up|"
     r"where('s| is| are)|link to|share|send me|latest|existing|already (made|created|built))\b", re.I)

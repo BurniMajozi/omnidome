@@ -37,15 +37,22 @@ import {
   Clock,
 } from "lucide-react"
 import {
-  invokeAgentAGUI,
   recordAgentFeedback,
   listConversations,
-  getConversation,
   deleteConversation,
-  type AGUIEvent,
   type ConversationRead,
   AGENT_CATALOG,
 } from "@/lib/orchestrator-api"
+import {
+  useChatSession, startRun, resetSession, loadConversationInto, getSession, setChatVisible,
+  setMessages as storeSetMessages, setConversationId as storeSetConversationId, setSessionError,
+  type ChatMessage,
+} from "@/lib/agent-chat-store"
+import { requestBrowserNotifications } from "@/lib/agent-run-notify"
+import { AgentActivity } from "@/components/chat/agent-activity"
+import { ArtifactLinkCards } from "@/components/chat/artifact-link-cards"
+import { artifactItemsFromToolCalls } from "@/lib/artifact-links"
+import { parseMessage, type Artifact, type Segment } from "@/lib/chat-artifacts"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -109,49 +116,7 @@ function formatInitials(name?: string) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
-interface Artifact {
-  id: string
-  title: string
-  lang: string
-  code: string
-}
-
-interface Segment {
-  type: "text" | "artifact"
-  value: string // text content, or artifact id
-}
-
-interface Msg {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  streaming?: boolean
-}
-
-const FENCE = /```(\w+)?\n?([\s\S]*?)```/g
-
-/** Split a message into prose segments + artifact refs, collecting artifacts. */
-function parseMessage(msgId: string, content: string): { segments: Segment[]; artifacts: Artifact[] } {
-  const segments: Segment[] = []
-  const artifacts: Artifact[] = []
-  let last = 0
-  let idx = 0
-  let m: RegExpExecArray | null
-  FENCE.lastIndex = 0
-  while ((m = FENCE.exec(content)) !== null) {
-    if (m.index > last) segments.push({ type: "text", value: content.slice(last, m.index) })
-    const lang = (m[1] || "text").toLowerCase()
-    const code = m[2] ?? ""
-    const id = `${msgId}-art-${idx}`
-    artifacts.push({ id, title: `Artifact ${idx + 1}`, lang, code })
-    segments.push({ type: "artifact", value: id })
-    last = m.index + m[0].length
-    idx += 1
-  }
-  if (last < content.length) segments.push({ type: "text", value: content.slice(last) })
-  if (segments.length === 0) segments.push({ type: "text", value: content })
-  return { segments, artifacts }
-}
+type Msg = ChatMessage
 
 export function AgentArtifactChat({
   channelId,
@@ -164,10 +129,14 @@ export function AgentArtifactChat({
   extraContext?: string
   teamUsers?: { id: string; name: string; email?: string }[]
 }) {
-  const [messages, setMessages] = useState<Msg[]>([])
+  const chatKey = `comms:${channelId ?? "general"}`
+  const session = useChatSession(chatKey)
+  const { messages, conversationId, error } = session
+  const sending = session.isSending
+  const setMessages = (u: ChatMessage[] | ((m: ChatMessage[]) => ChatMessage[])) => storeSetMessages(chatKey, u)
+  const setConversationId = (id: string | null) => storeSetConversationId(chatKey, id)
+  const setError = (e: string | null) => setSessionError(chatKey, e)
   const [input, setInput] = useState("")
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0].id)
   const [selectedAgent, setSelectedAgent] = useState("auto")
   const [bypassPermissions, setBypassPermissions] = useState(false)
@@ -180,7 +149,6 @@ export function AgentArtifactChat({
   const [feedbackMap, setFeedbackMap] = useState<Record<string, "thumbs_up" | "thumbs_down">>({})
   
   // Conversation History state
-  const [conversationId, setConversationId] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [conversationsList, setConversationsList] = useState<ConversationRead[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
@@ -204,27 +172,13 @@ export function AgentArtifactChat({
   }, [loadHistory])
 
   const handleSelectConversation = async (id: string) => {
+    if (getSession(chatKey).conversationId === id && getSession(chatKey).isSending) {
+      setShowHistory(false)
+      return
+    }
     setLoadingConvId(id)
     try {
-      const data = await getConversation(id)
-      const loaded: Msg[] = []
-      for (const m of data.messages || []) {
-        if (m.role === "user") {
-          loaded.push({
-            id: m.id || `${id}-${loaded.length}`,
-            role: "user",
-            content: m.content || "",
-          })
-        } else if (m.role === "assistant") {
-          loaded.push({
-            id: m.id || `${id}-${loaded.length}`,
-            role: "assistant",
-            content: m.content || "",
-          })
-        }
-      }
-      setMessages(loaded)
-      setConversationId(data.id)
+      const data = await loadConversationInto(chatKey, id)
       if (data.agent_type && AVAILABLE_AGENTS.some((a) => a.id === data.agent_type)) {
         setSelectedAgent(data.agent_type)
       }
@@ -237,10 +191,8 @@ export function AgentArtifactChat({
   }
 
   const handleNewChat = () => {
-    setMessages([])
+    resetSession(chatKey)
     setInput("")
-    setConversationId(null)
-    setError(null)
     setActiveArtifact(null)
     setShowHistory(false)
   }
@@ -257,6 +209,11 @@ export function AgentArtifactChat({
       console.error("Failed to delete conversation:", err)
     }
   }
+
+  useEffect(() => {
+    setChatVisible(chatKey, true)
+    return () => setChatVisible(chatKey, false)
+  }, [chatKey])
 
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -349,7 +306,7 @@ export function AgentArtifactChat({
     const artifactsById: Record<string, Artifact> = {}
     for (const msg of messages) {
       if (msg.role !== "assistant") continue
-      const { segments, artifacts } = parseMessage(msg.id, msg.content)
+      const { segments, artifacts } = parseMessage(msg.id, msg.content, !msg.isStreaming)
       segmentsByMsg[msg.id] = segments
       for (const a of artifacts) artifactsById[a.id] = a
     }
@@ -405,46 +362,22 @@ export function AgentArtifactChat({
 
   const send = useCallback(async () => {
     const text = input.trim()
-    if (!text || sending) return
+    if (!text || getSession(chatKey).isSending) return
     setError(null)
     setInput("")
-    setSending(true)
-
-    const aId = `${Date.now() + 1}`
-    setMessages((p) => [
-      ...p,
-      { id: `${Date.now()}`, role: "user", content: text },
-      { id: aId, role: "assistant", content: "", streaming: true },
-    ])
-
-    try {
-      await invokeAgentAGUI(
-        {
-          agent_type: selectedAgent,
-          message: text,
-          context: { channel_id: channelId, channel_name: channelName, history },
-          conversation_id: conversationId || undefined,
-          stream_tokens: true,
-        },
-        (e: AGUIEvent) => {
-          if (e.type === "TEXT_MESSAGE_CONTENT") {
-            const delta = (e.data?.delta as string) || ""
-            if (delta) setMessages((p) => p.map((m) => (m.id === aId ? { ...m, content: m.content + delta } : m)))
-          }
-          const convId = (e as any).conversation_id || (e.data as any)?.conversation_id
-          if (convId && typeof convId === "string") {
-            setConversationId(convId)
-          }
-        },
-      )
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSending(false)
-      setMessages((p) => p.map((m) => (m.id === aId ? { ...m, streaming: false } : m)))
-      void loadHistory()
-    }
-  }, [input, sending, channelId, channelName, history, selectedAgent, conversationId, loadHistory])
+    void requestBrowserNotifications()
+    // Runs live in the chat store (not this component) so they survive switching tabs/pages; the steps and tool
+    // activity stream into the message exactly as in the floating chat.
+    await startRun(chatKey, {
+      agentType: selectedAgent,
+      agentName: AVAILABLE_AGENTS.find((a) => a.id === selectedAgent)?.name ?? selectedAgent,
+      message: text,
+      context: { channel_id: channelId, channel_name: channelName, history },
+      agentNames: (type) => AVAILABLE_AGENTS.find((a) => a.id === type)?.name,
+    })
+    void loadHistory()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, chatKey, channelId, channelName, history, selectedAgent, loadHistory])
 
   const artifactValue = (a: Artifact) => artifactEdits[a.id] ?? a.code
   const active = activeArtifact ? artifactsById[activeArtifact] : null
@@ -668,7 +601,8 @@ export function AgentArtifactChat({
             return (
               <div key={m.id} className="flex justify-start">
                 <div className="max-w-[85%] space-y-2 rounded-lg bg-secondary px-3 py-2 text-sm text-foreground">
-                  {m.content === "" && m.streaming && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {m.content === "" && m.isStreaming && !m.activity && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {m.activity && <AgentActivity activity={m.activity} streaming={!!m.isStreaming} />}
                   {segments.map((seg, i) => {
                     if (seg.type === "text") {
                       return seg.value.trim() ? (
@@ -697,8 +631,10 @@ export function AgentArtifactChat({
                     )
                   })}
 
+                  <ArtifactLinkCards items={artifactItemsFromToolCalls(m.toolCalls)} />
+
                   {/* Message Action Bar (Copy & Thumbs Up / Down) */}
-                  {!m.streaming && m.content && (
+                  {!m.isStreaming && m.content && (
                     <div className="flex items-center justify-end gap-1 pt-1 border-t border-border/40">
                       <Button
                         variant="ghost"

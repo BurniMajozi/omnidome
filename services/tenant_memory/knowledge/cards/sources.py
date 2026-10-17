@@ -252,18 +252,129 @@ async def ids_billing_digests(session, tenant: str) -> dict:
 
 async def fetch_tickets(session, tenant: str, wm: Optional[dict], limit: int) -> Page:
     ks, kp = _keyset("COALESCE(updated_at, created_at)", "id::text", wm)
-    rows = await _rows(session, f"""SELECT id::text AS id, customer_id::text AS customer_id, subject, description, priority, status,
-        category, is_fcr, resolution_notes, resolved_at, created_at, updated_at, COALESCE(updated_at, created_at) AS ts
-        FROM tickets WHERE tenant_id = CAST(:tenant_id AS uuid){ks} ORDER BY COALESCE(updated_at, created_at), id::text LIMIT :limit""",
-        {"tenant_id": tenant, "limit": limit, **kp})
+    base = """SELECT id::text AS id, customer_id::text AS customer_id, subject, description, priority, status,
+        category, is_fcr, resolution_notes, resolved_at, created_at, updated_at, COALESCE(updated_at, created_at) AS ts"""
+    unified = """, ticket_no, source, queue, occurrence_count, last_occurrence_at, source_ref_type, source_ref_id, event_type"""
+    timing = """, assigned_to::text AS assigned_to, sla_due_at, first_response_at, first_assigned_at, last_activity_at, escalated_at,
+        assignment_count, modification_count, transfer_count, reopen_count, reply_channel"""
+    tail = f""" FROM tickets WHERE tenant_id = CAST(:tenant_id AS uuid){ks} ORDER BY COALESCE(updated_at, created_at), id::text LIMIT :limit"""
+    params = {"tenant_id": tenant, "limit": limit, **kp}
+    rows = None
+    for cols in (unified + timing, unified, ""):     # older schemas lack the later columns: take as many as exist
+        try:
+            rows = await _rows(session, base + cols + tail, params)
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    if rows is None:
+        from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable
+        raise SourceUnavailable("tickets table is not readable")
     page = Page()
     _track(page, rows)
+    ids = [r["id"] for r in rows]
     replies = await _rows(session, """SELECT id::text AS id, ticket_id::text AS ticket_id, author_type, message, is_private, created_at
-        FROM ticket_replies WHERE ticket_id = ANY(CAST(:ids AS uuid[])) AND is_private = false""",
-        {"ids": [r["id"] for r in rows]}) if rows else []
+        FROM ticket_replies WHERE ticket_id = ANY(CAST(:ids AS uuid[])) AND is_private = false""", {"ids": ids}) if rows else []
     rep_by = _group(replies, "ticket_id")
-    page.cards = [B.ticket_card(r, rep_by.get(r["id"], []), _utc(r["ts"])) for r in rows]
+    events, names = {}, {}
+    if rows:
+        try:      # the lifecycle log: the last 12 events per ticket. Internal note text is never selected.
+            ev = await _rows(session, """SELECT id::text AS id, ticket_id::text AS ticket_id, event_type, actor_type, from_value, to_value,
+                    CASE WHEN visibility = 'public' THEN note END AS note, visibility, channel, created_at
+                  FROM (SELECT e.*, row_number() OVER (PARTITION BY ticket_id ORDER BY created_at DESC, id) AS rn
+                          FROM ticket_events e WHERE ticket_id = ANY(CAST(:ids AS uuid[]))) x WHERE rn <= 12""", {"ids": ids})
+            events = _group(ev, "ticket_id")
+        except Exception:  # noqa: BLE001 - support has not created ticket_events yet
+            events = {}
+        owners = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
+        if owners:
+            try:
+                names = {n["id"]: n["name"] for n in await _rows(session, """SELECT id::text AS id, NULLIF(full_name, '') AS name
+                    FROM users WHERE tenant_id = CAST(:t AS uuid) AND id = ANY(CAST(:ids AS uuid[]))""", {"t": tenant, "ids": owners})}
+            except Exception:  # noqa: BLE001
+                names = {}
+    page.cards = [B.ticket_card(r, rep_by.get(r["id"], []), _utc(r["ts"]), events.get(r["id"]), names.get(r.get("assigned_to"))) for r in rows]
     return page
+
+
+# Thresholds mirror services/support/kpi.py (this image does not carry the support service); a test keeps them in step.
+STALE_HOURS = {"URGENT": 2, "HIGH": 4, "NORMAL": 12, "LOW": 36}
+def _stale(a: str = "") -> str:
+    """SQL for "open and idle past its priority's limit"; `a` is a table alias prefix such as "t."."""
+    return (f"({a}status NOT IN ('RESOLVED', 'CLOSED') AND COALESCE({a}last_activity_at, {a}updated_at, {a}created_at) < "
+            f"now() - make_interval(hours => CASE {a}priority WHEN 'URGENT' THEN 2 WHEN 'HIGH' THEN 4 WHEN 'LOW' THEN 36 ELSE 12 END))")
+
+
+_STALE = _stale()
+_OVERDUE = "(status NOT IN ('RESOLVED', 'CLOSED') AND sla_due_at IS NOT NULL AND sla_due_at < now())"
+_HRS = "extract(epoch FROM ({e} - {s})) / 3600.0"
+
+
+async def fetch_ticket_digests(session, tenant: str, wm: Optional[dict], limit: int, days: int = 30) -> Page:
+    """One card per tenant: the desk's current state, KPIs, load per queue/person and the late-ticket list."""
+    p = {"t": tenant, "d": days}
+    try:
+        now = (await _rows(session, f"""SELECT count(*) AS total,
+                count(*) FILTER (WHERE status NOT IN ('RESOLVED', 'CLOSED')) AS open,
+                count(*) FILTER (WHERE status NOT IN ('RESOLVED', 'CLOSED') AND assigned_to IS NULL) AS unassigned,
+                count(*) FILTER (WHERE status = 'ESCALATED') AS escalated,
+                count(*) FILTER (WHERE {_OVERDUE}) AS overdue, count(*) FILTER (WHERE {_STALE}) AS stale
+              FROM tickets WHERE tenant_id = CAST(:t AS uuid)""", p))[0]
+    except Exception as exc:  # noqa: BLE001 - the support service has not added the time columns yet
+        from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable
+        raise SourceUnavailable(f"ticket timing columns unavailable: {type(exc).__name__}")
+    if not now["total"]:
+        return Page()
+    kpi = (await _rows(session, f"""SELECT count(*) AS opened, count(*) FILTER (WHERE resolved_at IS NOT NULL) AS resolved,
+            count(*) FILTER (WHERE status NOT IN ('RESOLVED', 'CLOSED')) AS still_open,
+            avg({_HRS.format(e='first_response_at', s='created_at')}) FILTER (WHERE first_response_at >= created_at) AS mean_respond,
+            avg({_HRS.format(e='first_assigned_at', s='created_at')}) FILTER (WHERE first_assigned_at >= created_at) AS mean_assign,
+            avg({_HRS.format(e='resolved_at', s='created_at')}) FILTER (WHERE resolved_at >= created_at) AS mean_resolve,
+            count(*) FILTER (WHERE resolved_at IS NOT NULL AND assignment_count <= 1 AND transfer_count = 0 AND reopen_count = 0) AS first_touch,
+            count(*) FILTER (WHERE resolved_at IS NOT NULL AND sla_due_at IS NOT NULL) AS sla_judged,
+            count(*) FILTER (WHERE resolved_at IS NOT NULL AND sla_due_at IS NOT NULL AND resolved_at <= sla_due_at) AS sla_met
+          FROM tickets WHERE tenant_id = CAST(:t AS uuid) AND created_at >= now() - make_interval(days => :d)""", p))[0]
+    queues = await _rows(session, f"""SELECT COALESCE(queue, 'none') AS queue, count(*) AS open,
+            count(*) FILTER (WHERE {_OVERDUE}) AS overdue, count(*) FILTER (WHERE assigned_to IS NULL) AS unassigned
+          FROM tickets WHERE tenant_id = CAST(:t AS uuid) AND status NOT IN ('RESOLVED', 'CLOSED') GROUP BY 1 ORDER BY open DESC LIMIT 10""", p)
+    people = await _rows(session, f"""SELECT COALESCE(NULLIF(u.full_name, ''), 'a team member') AS name, a.open, a.overdue, a.resolved, a.mean_resolve
+          FROM (SELECT assigned_to AS uid, count(*) FILTER (WHERE status NOT IN ('RESOLVED', 'CLOSED')) AS open,
+                       count(*) FILTER (WHERE {_OVERDUE}) AS overdue,
+                       count(*) FILTER (WHERE resolved_at >= now() - make_interval(days => :d)) AS resolved,
+                       avg({_HRS.format(e='resolved_at', s='created_at')}) FILTER (WHERE resolved_at >= now() - make_interval(days => :d)) AS mean_resolve
+                  FROM tickets WHERE tenant_id = CAST(:t AS uuid) AND assigned_to IS NOT NULL GROUP BY assigned_to) a
+          LEFT JOIN users u ON u.id = a.uid WHERE a.open > 0 OR a.resolved > 0 ORDER BY a.open DESC, a.resolved DESC LIMIT 10""", p)
+    stages = await _rows(session, """WITH s AS (
+            SELECT e.ticket_id, e.to_value AS status, e.created_at AS at,
+                   LEAD(e.created_at) OVER (PARTITION BY e.ticket_id ORDER BY e.created_at, e.id) AS until
+              FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
+             WHERE e.tenant_id = CAST(:t AS uuid) AND t.created_at >= now() - make_interval(days => :d)
+               AND e.to_value IN ('OPEN', 'IN_PROGRESS', 'ESCALATED', 'ON_HOLD', 'PENDING', 'RESOLVED', 'CLOSED')
+               AND e.event_type IN ('created', 'status_changed', 'escalated', 'resolved', 'closed', 'reopened'))
+          SELECT status, count(DISTINCT ticket_id) AS tickets, avg(extract(epoch FROM (COALESCE(until, now()) - at)) / 3600.0) AS avg_hours
+            FROM s WHERE status NOT IN ('RESOLVED', 'CLOSED') GROUP BY status ORDER BY avg_hours DESC""", p)
+    late_rows = await _rows(session, f"""SELECT t.id::text AS id, t.ticket_no, t.subject, t.priority, t.status, t.queue, NULLIF(u.full_name, '') AS assignee,
+            GREATEST(0, extract(epoch FROM (now() - t.sla_due_at)) / 3600.0) AS hours_overdue,
+            extract(epoch FROM (now() - COALESCE(t.last_activity_at, t.updated_at, t.created_at))) / 3600.0 AS hours_idle
+          FROM tickets t LEFT JOIN users u ON u.id = t.assigned_to
+         WHERE t.tenant_id = CAST(:t AS uuid) AND t.status NOT IN ('RESOLVED', 'CLOSED')
+           AND ((t.sla_due_at IS NOT NULL AND t.sla_due_at < now()) OR {_stale('t.')})
+         ORDER BY (t.sla_due_at IS NOT NULL AND t.sla_due_at < now()) DESC, t.sla_due_at NULLS LAST, t.created_at LIMIT 15""", p)
+    try:
+        flagged = await _rows(session, """SELECT t.id::text AS id, t.ticket_no, t.subject FROM ticket_jev_decisions d JOIN tickets t ON t.id = d.ticket_id
+            WHERE d.tenant_id = CAST(:t AS uuid) AND d.stage = 'review' AND d.disposition = 'flagged'
+              AND d.created_at > now() - interval '14 days' ORDER BY d.created_at DESC LIMIT 5""", p)
+    except Exception:  # noqa: BLE001 - no Jev decisions table yet
+        flagged = []
+    late = [{**r, "hours_overdue": round(float(r["hours_overdue"] or 0)), "hours_idle": round(float(r["hours_idle"] or 0))} for r in late_rows]
+    data = {"days": days, "now": {k: int(v or 0) for k, v in now.items()}, "kpi": kpi, "queues": queues, "people": people,
+            "stages": stages, "late": late, "flagged": flagged}
+    page = Page(rows=1)
+    page.cards = [B.ticket_digest(data, datetime.now(timezone.utc))]
+    return page
+
+
+async def ids_ticket_digests(session, tenant: str) -> dict:
+    return {}      # one rolling card per tenant, rewritten in place: never tombstoned by reconcile
 
 
 async def ids_tickets(session, tenant: str) -> dict:
@@ -442,6 +553,7 @@ SOURCES: dict[str, Source] = {s.name: s for s in [
     Source("pipelines", "sales", ("pipeline",), fetch_pipelines, ids_pipelines, snapshot=True),
     Source("billing_digests", "billing", ("billing_digest",), fetch_billing_digests, ids_billing_digests, snapshot=True),
     Source("tickets", "support", ("ticket",), fetch_tickets, ids_tickets),
+    Source("ticket_digests", "support", ("ticket_digest",), fetch_ticket_digests, ids_ticket_digests, snapshot=True),
     Source("campaigns", "marketing", ("campaign",), fetch_campaigns, ids_campaigns),
     Source("social_digests", "marketing", ("social_digest",), fetch_social_digests, ids_social_digests, snapshot=True),
     Source("research", "analytics", ("research",), fetch_research, ids_research),
@@ -495,4 +607,5 @@ def source_enabled(name: str, raw: Optional[str] = None) -> bool:
 from services.tenant_memory.knowledge.cards import sources_ext as _sources_ext  # noqa: E402,F401  registers EXT_SOURCES into SOURCES
 from services.tenant_memory.knowledge.cards import builders_capabilities as _builders_capabilities  # noqa: E402,F401
 from services.tenant_memory.knowledge.cards import sources_ha as _sources_ha  # noqa: E402,F401
+from services.tenant_memory.knowledge.cards import sources_email as _sources_email  # noqa: E402,F401  email_threads (untrusted, opt-in at query time)
 from services.tenant_memory.knowledge.cards import sources_catalogue as _sources_catalogue  # noqa: E402,F401  catalogue_products (no costs/margins)

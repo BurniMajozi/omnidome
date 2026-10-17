@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase/client"
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { Header } from "@/components/dashboard/header"
 import { AGUIChat } from "@/components/chat/ag-ui-chat"
+import { requestOpenConversation } from "@/lib/agent-chat-store"
 import { DashboardOverview } from "@/components/modules/dashboard-overview"
 import { SalesModule } from "@/components/modules/sales-module"
 import { CrmModule } from "@/components/modules/crm-module"
@@ -71,6 +72,15 @@ export default function Dashboard() {
     const applyLocation = () => {
       if (typeof window === "undefined") return
       const params = new URLSearchParams(window.location.search)
+      // Jump back to an agent run's chat (toast / bell link): /dashboard?agentChat=<conversation_id>
+      const chatConv = params.get("agentChat") ?? params.get("conversation")
+      if (chatConv || params.get("agentRun")) {
+        requestOpenConversation(chatConv)
+        setChatOpen(true)
+        params.delete("agentChat"); params.delete("conversation"); params.delete("agentRun")
+        const qs = params.toString()
+        window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""))
+      }
       const sec = params.get("section") || params.get("tab")
       if (!sec || !sectionTitles[sec]) return
       setActiveSection(sec)

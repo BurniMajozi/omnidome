@@ -9,6 +9,7 @@ from typing import Any, Optional
 IMPORTANCE = {"low": 0.25, "normal": 0.5, "high": 0.75, "critical": 1.0}
 VISIBILITIES = ("private", "team", "tenant", "system")
 ADMIN_ROLES = {"admin", "org_admin", "tenant_admin", "owner"}
+OPT_IN_SOURCE_TYPES = ("email_thread",)
 
 
 def content_hash(text: str, model: str = "") -> str:
@@ -100,6 +101,16 @@ class Filters:
     until: Optional[datetime] = None      # as_of <= until
     min_importance: Optional[float] = None
     include_expired: bool = False         # valid_to in the past
+    exclude_source_types: Optional[list] = None   # extra exclusions on top of OPT_IN_SOURCE_TYPES
+
+    def excluded(self) -> list:
+        """Source types left out of this query: opt-in sources (external, untrusted text such as inbound email)
+        appear only when the caller names the source type, so they never ride along in a generic search, graph walk
+        or auto-grounding."""
+        out = set(self.exclude_source_types or [])
+        if not self.source_types:
+            out |= set(OPT_IN_SOURCE_TYPES)
+        return sorted(out)
 
 
 @dataclass

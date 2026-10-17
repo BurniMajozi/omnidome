@@ -107,7 +107,7 @@ def test_durable_question_owner_tenant_resume_and_cancel(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_live_stream_reports_progress_before_answer_and_cancels(monkeypatch):
+def test_live_stream_reports_progress_before_answer_and_survives_disconnect_until_cancelled(monkeypatch):
     from services.agent_orchestrator.routes import protocols
     from services.agent_orchestrator.protocols import AGUIRunRequest
     stored = []
@@ -127,13 +127,21 @@ def test_live_stream_reports_progress_before_answer_and_cancels(monkeypatch):
             finally: cancelled.append(True)
     monkeypatch.setattr(protocols, "Agent", Agent)
     async def scenario():
-        response = await protocols.ag_ui_run(AGUIRunRequest(agent_type="assistant", message="Check memory", context={"user_id": "forged"}), AuthContext(uuid.uuid4(), uuid.uuid4()))
+        response_ctx_tenant, response_ctx_user = uuid.uuid4(), uuid.uuid4()
+        monkeypatch.setattr(protocols.run_registry, "_notify_done", lambda rec: asyncio.sleep(0))
+        response = await protocols.ag_ui_run(AGUIRunRequest(agent_type="assistant", message="Check memory", context={"user_id": "forged"}), AuthContext(response_ctx_user, response_ctx_tenant))
         iterator = response.body_iterator
         assert "RUN_STARTED" in await asyncio.wait_for(anext(iterator), 2)
         event = await asyncio.wait_for(anext(iterator), 2)
         assert '"CUSTOM"' in event and "Searching company memory" in event
-        await iterator.aclose()
-        assert cancelled == [True]
+        await iterator.aclose()  # the browser navigated away: the run belongs to the backend and keeps going
+        await asyncio.sleep(0.05)
+        assert cancelled == []
+        ctx = AuthContext(response_ctx_user, response_ctx_tenant)
+        run = protocols.run_registry.list_for(ctx.tenant_id, ctx.user_id)[0]
+        await protocols.ag_ui_run_cancel(run.run_id, ctx)  # an explicit Stop does cancel it
+        await asyncio.gather(run.task, return_exceptions=True)
+        assert cancelled == [True] and run.status == "cancelled"
         assert stored[0].context["user_id"] != "forged"
         assert stored[0].context["owner_user_id"] == stored[0].context["user_id"]
     asyncio.run(scenario())

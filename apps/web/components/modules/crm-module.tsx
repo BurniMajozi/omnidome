@@ -88,7 +88,8 @@ import {
   type LeadItem,
   type CompanyItem,
 } from "@/lib/crm-api"
-import { normalizeLeadStatus, isClosedLostStatus, leadStageDistribution, read360Meta } from "@/lib/crm-derive"
+import { normalizeLeadStatus, isClosedLostStatus, read360Meta } from "@/lib/crm-derive"
+import { CrmStageFunnel } from "./crm-stage-funnel"
 import { describeLoadable, type Loadable } from "@/lib/service-state"
 import { NotConnected } from "@/components/ui/not-connected"
 
@@ -1157,11 +1158,8 @@ export function CrmModule() {
         {/* TAB 6: LEAD FUNNEL BY CHANNEL                                     */}
         {/* ───────────────────────────────────────────────────────────────── */}
         <TabsContent value="funnel" className="space-y-6 pt-4">
-          <Card><CardHeader><CardTitle>Lead stage distribution</CardTitle><CardDescription>Current lead statuses across all leads. Stage populations are not transition conversion rates.</CardDescription></CardHeader><CardContent>
-            {summaryData?.leadStatusCounts == null ? <p className="text-sm text-muted-foreground">All-lead stage counts are unavailable.</p> : <table className="w-full text-sm">
-              <thead><tr><th className="text-left">Stage</th><th>Leads</th><th>Share of all leads</th></tr></thead>
-              <tbody>{leadStageDistribution(summaryData.leadStatusCounts).map(({ stage, count, pctOfTotal }) => <tr key={stage}><td className="py-2">{stage}</td><td className="text-center">{count}</td><td className="text-center">{pctOfTotal}%</td></tr>)}</tbody>
-            </table>}
+          <Card><CardHeader><CardTitle>Lead stage distribution</CardTitle><CardDescription>Leads that have reached each stage or beyond, across all leads.</CardDescription></CardHeader><CardContent>
+            {summaryData?.leadStatusCounts == null ? <p className="text-sm text-muted-foreground">All-lead stage counts are unavailable.</p> : <CrmStageFunnel counts={summaryData.leadStatusCounts} />}
             <Button variant="outline" className="mt-3" onClick={() => setActiveTab("pipeline")}>View loaded leads</Button>
           </CardContent></Card>
         </TabsContent>

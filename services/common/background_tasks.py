@@ -61,6 +61,18 @@ def schedule_background(coro: Coroutine) -> "asyncio.Task":
         exc = t.exception()
         if exc is not None:
             logger.error("Background task %r crashed: %r", coro, exc, exc_info=exc)
+            # Raise a deduplicated support ticket (never raises; see error_reporting).
+            from services.common.error_reporting import report_exception
+            report_exception(exc, kind="background", job=getattr(coro, "__qualname__", None) or "background task")
 
     task.add_done_callback(_on_done)
+    return task
+
+
+def schedule_background_quiet(coro: Coroutine, loop: "asyncio.AbstractEventLoop | None" = None) -> "asyncio.Task":
+    """Like schedule_background but a crash is only logged, never ticketed (used by the error hook itself
+    so a failing report cannot report itself)."""
+    task = (loop or asyncio.get_running_loop()).create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(lambda t: _BACKGROUND_TASKS.discard(t))
     return task

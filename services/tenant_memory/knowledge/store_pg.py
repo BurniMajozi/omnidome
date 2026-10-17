@@ -152,6 +152,9 @@ def filter_clause(flt: Filters, alias: str = "c") -> tuple[str, dict]:
     if flt.source_types:
         clauses.append(f"{a}.source_type = ANY(CAST(:f_types AS text[]))")
         params["f_types"] = list(flt.source_types)
+    if flt.excluded():
+        clauses.append(f"NOT ({a}.source_type = ANY(CAST(:f_not_types AS text[])))")
+        params["f_not_types"] = flt.excluded()
     if flt.tags:
         clauses.append(f"{a}.tags && CAST(:f_tags AS text[])")
         params["f_tags"] = list(flt.tags)

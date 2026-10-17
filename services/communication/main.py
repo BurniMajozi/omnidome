@@ -45,8 +45,13 @@ async def startup() -> None:
     else:
         from services.communication.database import ensure_message_schema
         await ensure_message_schema()  # idempotent; adds messages.client_msg_id + history indexes
+    from services.communication import mail_state
+    await mail_state.ensure_schema()  # email_threads / mailbox access / audit log + event bus tables (idempotent)
     from services.communication.routes.mail import start_mail_workers
     start_mail_workers()
+    # Delivers ticket notifications to requesters and creates the tasks/escalations/schedule items rules ask for.
+    from services.communication import ticket_bridge
+    ticket_bridge.consumer.start()
 
 
 @app.middleware("http")
@@ -83,6 +88,7 @@ from services.communication.routes.ws import router as ws_router
 from services.communication.routes.schedule import router as schedule_router
 from services.communication.routes.directory import router as directory_router
 from services.communication.routes.mail import router as mail_router
+from services.communication.routes.mail_threads import router as mail_threads_router
 
 app.include_router(channels_router, prefix="/api/v1")
 app.include_router(messages_router, prefix="/api/v1")
@@ -98,6 +104,7 @@ app.include_router(ws_router, prefix="/api/v1")  # WebSocket real-time channel u
 app.include_router(schedule_router, prefix="/api/v1")  # Schedule events
 app.include_router(directory_router, prefix="/api/v1")  # Team directory (invite pickers)
 app.include_router(mail_router, prefix="/api/v1")  # Agent Mail inbox & automated responder
+app.include_router(mail_threads_router, prefix="/api/v1")  # Email conversations: state, agent read/draft/send, backfill, audit
 
 
 

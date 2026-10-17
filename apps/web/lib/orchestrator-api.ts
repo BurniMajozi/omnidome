@@ -460,22 +460,7 @@ export async function invokeAgentStream(
 
 // ── AG-UI Streaming Client ──────────────────────────────────────────────
 
-export async function invokeAgentAGUI(
-  req: AGUIRunRequest,
-  onEvent: (event: AGUIEvent) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/run`, {
-    signal,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  })
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`AG-UI run failed: ${res.status} — ${err}`)
-  }
-
+async function readAguiStream(res: Response, onEvent: (event: AGUIEvent) => void): Promise<void> {
   const reader = res.body?.getReader()
   if (!reader) throw new Error("No response body")
 
@@ -500,6 +485,54 @@ export async function invokeAgentAGUI(
       }
     }
   }
+}
+
+export async function invokeAgentAGUI(
+  req: AGUIRunRequest,
+  onEvent: (event: AGUIEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/run`, {
+    signal,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`AG-UI run failed: ${res.status} — ${err}`)
+  }
+  await readAguiStream(res, onEvent)
+}
+
+// Runs are owned by the orchestrator, not by the SSE connection: these re-attach to one (replaying what was
+// missed) after the user navigated away or reloaded, list the caller's runs, and stop one.
+export interface AgentRunSummary {
+  run_id: string
+  conversation_id: string
+  agent_type: string
+  agent_name: string
+  status: "running" | "finished" | "error" | "cancelled"
+  message: string
+  started_at: number
+  ended_at: number | null
+  preview: string
+}
+
+export async function attachAgentRun(runId: string, onEvent: (event: AGUIEvent) => void, signal?: AbortSignal, after = 0): Promise<void> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/runs/${encodeURIComponent(runId)}/events?after=${after}`, { signal })
+  if (!res.ok) throw new Error(`Run is no longer available (${res.status})`)
+  await readAguiStream(res, onEvent)
+}
+
+export async function listAgentRuns(): Promise<AgentRunSummary[]> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/runs`)
+  if (!res.ok) return []
+  return ((await res.json()).data ?? []) as AgentRunSummary[]
+}
+
+export async function cancelAgentRun(runId: string): Promise<void> {
+  await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }).catch(() => undefined)
 }
 
 // ── A2UI API ─────────────────────────────────────────────────────────────

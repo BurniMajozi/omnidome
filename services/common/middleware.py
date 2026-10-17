@@ -75,6 +75,18 @@ def add_request_logging(app: FastAPI) -> None:
     app.add_middleware(RequestLoggingMiddleware)
 
 
+def _report_unhandled(request: Request, exc: BaseException) -> None:
+    """Raise a deduplicated support ticket for an uncaught exception (never raises, never blocks)."""
+    try:
+        from services.common.error_reporting import report_exception
+
+        route = getattr(request.scope.get("route"), "path", None) or "unrouted"
+        report_exception(exc, method=request.method, route=route,
+                         tenant_id=getattr(request.state, "tenant_id", None))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def add_exception_handlers(app: FastAPI) -> None:
     """Add global exception handlers for consistent error responses."""
 
@@ -97,6 +109,7 @@ def add_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(500)
     async def internal_error_handler(request: Request, exc):
         logger.error("Internal server error: %s %s\n%s", request.method, log_path(request.url.path), traceback.format_exc())
+        _report_unhandled(request, exc)
         return Response(
             content='{"detail": "Internal server error"}',
             status_code=500,

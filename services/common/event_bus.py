@@ -353,6 +353,9 @@ class EventConsumer:
                 )
                 logger.error("[%s] %s dead after %s attempts: %s",
                              self.name, row["event_type"], row["attempts"], error[:200])
+                from services.common.error_reporting import report_job_failure
+                report_job_failure(service=self.name, job=f"event:{row['event_type']}", error=error,
+                                   tenant_id=row["tenant_id"], location=self.name)
                 return
             delay = retry_delay_seconds(row["attempts"])
             await session.execute(

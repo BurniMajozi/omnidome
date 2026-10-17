@@ -134,14 +134,14 @@ async def send_email(to: str, subject: str, html: str, *, reply_to: Optional[str
     return str(data.get("message_id") or data.get("id") or "")
 
 
-async def send_message(to: list, subject: str, html: str, *, text: Optional[str] = None,
+async def send_message_ex(to: list, subject: str, html: str, *, text: Optional[str] = None,
                        cc: Optional[list] = None, bcc: Optional[list] = None,
                        reply_to_message_id: Optional[str] = None,
                        attachments: Optional[list] = None,
                        timeout: float = 30.0, creds: Optional[Creds] = None) -> str:
     """Multi-recipient send. With `reply_to_message_id`, uses the reply endpoint so the
     provider threads the message (In-Reply-To/References + thread_id); the reply
-    endpoint takes no `subject`. Returns the provider message id."""
+    endpoint takes no `subject`. Returns {"message_id", "thread_id"} (thread_id may be empty)."""
     c = _resolve(creds)
     inbox = quote(c.inbox, safe="")
     payload: dict = {"html": html or ""}
@@ -164,7 +164,12 @@ async def send_message(to: list, subject: str, html: str, *, text: Optional[str]
         resp = await client.post(url, headers=_headers(c), json=payload)
     _check(resp)
     data = _json(resp)
-    return str(data.get("message_id") or data.get("id") or "")
+    return {"message_id": str(data.get("message_id") or data.get("id") or ""), "thread_id": str(data.get("thread_id") or "")}
+
+
+async def send_message(*args: Any, **kwargs: Any) -> str:
+    """send_message_ex, returning only the provider message id (original signature)."""
+    return (await send_message_ex(*args, **kwargs))["message_id"]
 
 
 # ── Inbox reads (polling fallback) ─────────────────────────────────────────
@@ -193,6 +198,24 @@ async def list_messages(inbox: str, *, creds: Optional[Creds] = None, limit: int
                                 headers=_headers(c), params=params)
     _check(resp)
     return list(_json(resp).get("messages") or [])
+
+
+async def list_messages_page(inbox: str, *, creds: Optional[Creds] = None, limit: int = 100,
+                             page_token: Optional[str] = None, after: Optional[str] = None,
+                             ascending: bool = True, timeout: float = 30.0) -> tuple[list[dict], Optional[str]]:
+    """One page of an inbox (oldest first by default) and the next page token: used for the one-off backfill."""
+    c = _resolve(creds)
+    params: dict[str, Any] = {"limit": limit, "ascending": "true" if ascending else "false"}
+    if page_token:
+        params["page_token"] = page_token
+    if after:
+        params["after"] = after
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(f"{base_url()}/inboxes/{quote(inbox, safe='')}/messages",
+                                headers=_headers(c), params=params)
+    _check(resp)
+    data = _json(resp)
+    return list(data.get("messages") or []), (data.get("next_page_token") or None)
 
 
 async def get_message(inbox: str, message_id: str, *, creds: Optional[Creds] = None,

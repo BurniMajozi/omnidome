@@ -1092,6 +1092,18 @@ async def create_bank_item(payload: BankStatementItemCreate, tenant_id: uuid.UUI
     db.add(b)
     await db.flush()
     await db.refresh(b)
+    if b.status == "review":
+        # A bank line that needs a person's judgement becomes a support ticket (support/ticket_rules.py).
+        try:
+            from services.common.event_bus import publish
+            async with db.begin_nested():
+                await publish(db, tenant_id, "finance.reconciliation.exception",
+                              {"statement_ref": str(b.id), "amount": float(b.amount), "currency": "ZAR",
+                               "reason": f"Bank line flagged for review ({b.source or 'statement import'})."},
+                              source="finance", subject=("bank_statement_item", b.id),
+                              idempotency_key=f"recon:{b.id}")
+        except Exception as exc:  # noqa: BLE001 - never fail the import over a ticket
+            logger.warning("could not publish reconciliation exception: %s", type(exc).__name__)
     return {"id": str(b.id), "date": b.item_date.isoformat(), "description": b.description,
             "amount": float(b.amount), "status": b.status, "source": b.source}
 

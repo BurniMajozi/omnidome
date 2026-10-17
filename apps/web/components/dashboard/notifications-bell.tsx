@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Bell, CheckCheck, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { requestOpenConversation } from "@/lib/agent-chat-store"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,6 +48,13 @@ function timeAgo(iso: string, now: number): string {
 
 /** Tell the owning module to open the record a notification is about. */
 function openSubject(n: Notification) {
+  if (n.subject_type === "agent_run" && n.link?.startsWith("/dashboard")) {
+    // Finished agent run: jump back to its chat (opens the floating chat on the dashboard page).
+    const conv = new URL(n.link, window.location.origin).searchParams.get("conversation")
+    if (window.location.pathname === "/dashboard") requestOpenConversation(conv)
+    else window.location.assign(n.link)
+    return
+  }
   if (n.subject_type === "lead" && n.subject_id) {
     window.dispatchEvent(new CustomEvent("omnidome:open-lead", { detail: { id: n.subject_id } }))
   }

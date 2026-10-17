@@ -16,10 +16,12 @@ from typing import Any, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from services.common import agentmail as agentmail_client
+from services.common import email_safety as ES
+from services.communication import mail_state
 from services.common.auth import AuthContext, get_auth_context
 from services.communication.database import get_session
 from services.communication.models import AgentEmail, AgentMailbox, Message
@@ -291,6 +293,8 @@ async def _process_inbound(
     user_id: Optional[uuid.UUID],
     payload: InboundEmailPayload,
     auth_header: Optional[str] = None,
+    via: str = "api",
+    backfill: bool = False,
 ) -> AgentEmail:
     """Store an inbound email, post to the linked channel, and (optionally) invoke the agent."""
     recipient_clean = payload.recipient.lower().strip()
@@ -344,8 +348,24 @@ async def _process_inbound(
             message_id=payload.message_id or str(uuid.uuid4()),
         )
         session.add(email_record)
+        try:
+            await session.flush()
+        except IntegrityError:
+            # the unique (tenant, direction, message_id) index: a concurrent webhook/poll stored it first
+            await session.rollback()
+            dup = (await session.execute(select(AgentEmail).where(
+                AgentEmail.tenant_id == tenant_id, AgentEmail.direction == "inbound",
+                AgentEmail.message_id == payload.message_id))).scalars().first()
+            if dup is not None:
+                return dup
+            raise
+        await session.refresh(email_record)
+        # thread state + email.received event + audit row, in the same transaction as the email itself
+        await mail_state.record_and_publish(session, email_record, mailbox, emit=not backfill, source_via=via)
         await session.commit()
         await session.refresh(email_record)
+        if backfill:                      # history import: no channel post, no agent reply, no events
+            return email_record
 
         if mailbox.inbound_channel_id:
             channel_msg = build_inbound_channel_message(tenant_id, user_id, mailbox, payload)
@@ -500,8 +520,15 @@ async def agentmail_webhook(request: Request):
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid inbound email payload")
         candidates = await _received_owner_tenants(payload.recipient.lower().strip())
+    elif event_type == "message.sent":
+        # Mail sent outside our own send path (the AgentMail console, another service on the same inbox) is
+        # recorded as outbound so the thread history is complete. It has a side effect, so it is verified.
+        sent_inbox = str(msg.get("inbox_id") or "").lower().strip()
+        candidates = await _received_owner_tenants(sent_inbox)
+        if not candidates:
+            return {"status": "ignored", "event": event_type}
     else:
-        # message.sent etc.: no side effects, so no verification (a 401 here would make the
+        # other events: no side effects, so no verification (a 401 here would make the
         # provider retry and eventually disable the webhook).
         return {"status": "ignored", "event": event_type}
     if event_type in _DELIVERY_EVENTS and not candidates:
@@ -512,6 +539,11 @@ async def agentmail_webhook(request: Request):
     if event_type in _DELIVERY_EVENTS:
         await _apply_delivery_event(tenant_id, event_type, msg, event.get("bounce") or event)
         return {"status": "accepted", "event": event_type}
+    if event_type == "message.sent":
+        if tenant_id is None:
+            return {"status": "ignored", "event": event_type}
+        stored = await _store_provider_sent(tenant_id, str(msg.get("inbox_id") or ""), msg, via="webhook")
+        return {"status": "accepted", "event": event_type, "stored": bool(stored)}
 
     record = await _ingest_for_recipient(tenant_id, payload) if tenant_id is not None else None
     if record is None:
@@ -524,9 +556,54 @@ async def agentmail_webhook(request: Request):
 _DELIVERY_EVENTS = ("message.bounced", "message.complained", "message.rejected", "message.delivered")
 
 
+async def _store_provider_sent(tenant_id: uuid.UUID, inbox: str, msg: dict, *, via: str) -> Optional[AgentEmail]:
+    """Record a message the provider says was sent from one of our inboxes, once (message id)."""
+    mid = str(msg.get("message_id") or "")
+    if not mid:
+        return None
+    inbox = (inbox or str(msg.get("inbox_id") or "")).lower().strip()
+
+    async def _existing() -> Optional[AgentEmail]:
+        async with get_session() as session:
+            return (await session.execute(select(AgentEmail).where(
+                AgentEmail.tenant_id == tenant_id, AgentEmail.direction == "outbound",
+                AgentEmail.message_id == mid))).scalars().first()
+
+    if await _existing() is not None:
+        return None
+    if via == "webhook":
+        await asyncio.sleep(2.0)             # our own send stores its row just after the provider answers
+        if await _existing() is not None:
+            return None
+    flat = agentmail_client.normalize_message(msg, inbox)
+    to_list = [str(a) for a in (msg.get("to") or [])][:50]
+    async with get_session() as session:
+        mailbox = (await session.execute(select(AgentMailbox).where(
+            AgentMailbox.tenant_id == tenant_id, AgentMailbox.email_address == inbox,
+            AgentMailbox.is_active == True))).scalar_one_or_none()  # noqa: E712
+        if mailbox is None:
+            return None
+        rec = AgentEmail(
+            id=uuid.uuid4(), tenant_id=tenant_id, mailbox_id=mailbox.id, direction="outbound",
+            sender=mailbox.email_address, recipient=", ".join(to_list)[:255] or flat["recipient"],
+            subject=flat["subject"], body_text=flat["body_text"], body_html=flat["body_html"], status="sent",
+            headers={**flat["headers"], "source": "provider_sent", "to": to_list}, message_id=mid)
+        session.add(rec)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            return None
+        await session.refresh(rec)
+        await mail_state.record_and_publish(session, rec, mailbox, source_via=via)
+        await session.commit()
+        await session.refresh(rec)
+        return rec
+
+
 async def _ingest_for_recipient(tenant_id: uuid.UUID, payload: InboundEmailPayload) -> Optional[AgentEmail]:
     """Ingest for the tenant whose signature was verified (owner resolved before verification)."""
-    return await _process_inbound(tenant_id, None, payload)
+    return await _process_inbound(tenant_id, None, payload, via="webhook")
 
 
 async def _apply_delivery_event(tenant_id: uuid.UUID, event_type: str, msg: dict, detail: Any) -> None:
@@ -546,6 +623,22 @@ async def _apply_delivery_event(tenant_id: uuid.UUID, event_type: str, msg: dict
                 continue
             r.status = new_status
             r.headers = {**(r.headers or {}), "provider_event": event_type}
+            if new_status in ("bounced", "complained", "rejected"):
+                mb = await session.get(AgentMailbox, r.mailbox_id)
+                await mail_state.publish_delivery_failure(session, tenant_id, r, mb, event_type, detail)
+
+
+async def _hidden_mailbox_ids(session, auth: AuthContext) -> List[uuid.UUID]:
+    """Personal mailboxes owned by someone else: their mail never appears in another user's listing."""
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(
+                "SELECT mailbox_id FROM agent_mailbox_access WHERE tenant_id = :t AND kind = 'personal' "
+                "AND owner_user_id IS DISTINCT FROM CAST(:u AS uuid)"),
+                {"t": auth.tenant_id, "u": str(auth.user_id) if auth.user_id else None})).all()
+        return [r[0] for r in rows]
+    except Exception:  # noqa: BLE001 - table not created yet: no personal mailboxes exist
+        return []
 
 
 @router.get("/emails", response_model=List[AgentEmailRead])
@@ -561,6 +654,9 @@ async def list_emails(
     """Query recent agent emails. Total match count is in the X-Total-Count header."""
     async with get_session() as session:
         cond = [AgentEmail.tenant_id == auth.tenant_id, AgentEmail.status != "deleted"]
+        hidden = await _hidden_mailbox_ids(session, auth)
+        if hidden:
+            cond.append(AgentEmail.mailbox_id.notin_(hidden))
         if mailbox_id:
             cond.append(AgentEmail.mailbox_id == mailbox_id)
         if direction:
@@ -646,6 +742,8 @@ async def _deliver_and_store(
     reply_to_message_id: Optional[str] = None,
     extra_headers: Optional[dict] = None,
     attachments: Optional[List[dict]] = None,
+    thread_id: Optional[str] = None,
+    actor: Optional[dict] = None,
 ) -> AgentEmail:
     if not (to or cc or bcc):
         raise HTTPException(status_code=422, detail="At least one recipient is required")
@@ -666,13 +764,15 @@ async def _deliver_and_store(
     # Session closed: the provider HTTP call must not hold it.
     html_body = body_html if body_html else _text_to_html(body_text)
     provider_id = ""
+    provider_thread = ""
     err: Optional[str] = None
     try:
-        provider_id = await agentmail_client.send_message(
+        sent = await agentmail_client.send_message_ex(
             to, subject, html_body, text=body_text, cc=cc, bcc=bcc,
             reply_to_message_id=reply_to_message_id, creds=creds,
             **({"attachments": attachments} if attachments else {}),
         )
+        provider_id, provider_thread = sent["message_id"], sent.get("thread_id") or ""
     except agentmail_client.EmailNotConfigured:
         raise HTTPException(status_code=503, detail="Email provider not configured")
     except Exception as e:  # noqa: BLE001
@@ -684,6 +784,8 @@ async def _deliver_and_store(
         headers["attachments"] = [{"filename": a["filename"], "content_type": a["content_type"]} for a in attachments]
     if reply_to_message_id:
         headers["in_reply_to"] = reply_to_message_id
+    if provider_thread or thread_id:
+        headers["thread_id"] = provider_thread or thread_id
     if err:
         headers["error"] = err
     if extra_headers:
@@ -705,6 +807,28 @@ async def _deliver_and_store(
             message_id=provider_id or str(uuid.uuid4()),
         )
         session.add(rec)
+        try:
+            await session.flush()
+        except IntegrityError:
+            # the provider's message.sent webhook or the poll stored it first: keep that row, add what we know
+            await session.rollback()
+            existing = (await session.execute(select(AgentEmail).where(
+                AgentEmail.tenant_id == tenant_id, AgentEmail.direction == "outbound",
+                AgentEmail.message_id == provider_id))).scalars().first()
+            if existing is None:
+                raise
+            existing.headers = {**(existing.headers or {}), **headers}
+            await session.commit()
+            await session.refresh(existing)
+            return existing
+        await session.refresh(rec)
+        mb_row = await session.get(AgentMailbox, mailbox_id)
+        await mail_state.record_and_publish(session, rec, mb_row, source_via="api")
+        if actor:
+            await mail_state.audit(session, tenant_id, actor.get("action", "sent"), actor_id=actor.get("id"),
+                                   actor_kind=actor.get("kind", "user"), email_id=rec.id,
+                                   thread_key=mail_state.thread_key_of(rec.headers, rec.subject),
+                                   detail={"status": rec.status, **(actor.get("detail") or {})})
         await session.commit()
         await session.refresh(rec)
     return rec
@@ -990,6 +1114,17 @@ async def poll_inbound_once() -> int:
             owner = owners[0]
             try:
                 items = await agentmail_client.list_messages(inbox, creds=creds, limit=50, after=lookback)
+                sent_ids = [str(m.get("message_id")) for m in items
+                            if m.get("message_id") and "sent" in (m.get("labels") or [])]
+                if sent_ids:
+                    async with get_session() as session:
+                        seen_out = set((await session.execute(select(AgentEmail.message_id).where(
+                            AgentEmail.tenant_id == owner, AgentEmail.direction == "outbound",
+                            AgentEmail.message_id.in_(sent_ids)))).scalars().all())
+                    for mid in [i for i in sent_ids if i not in seen_out][:20]:
+                        full = await agentmail_client.get_message(inbox, mid, creds=creds)
+                        if await _store_provider_sent(owner, inbox, full, via="poll"):
+                            ingested += 1
                 ids = [str(m.get("message_id")) for m in items
                        if m.get("message_id") and "sent" not in (m.get("labels") or [])]
                 if not ids:
@@ -1001,7 +1136,7 @@ async def poll_inbound_once() -> int:
                     full = await agentmail_client.get_message(inbox, mid, creds=creds)
                     flat = agentmail_client.normalize_message(full, inbox)
                     flat["recipient"] = flat["recipient"] or inbox
-                    await _process_inbound(owner, None, InboundEmailPayload(**flat))
+                    await _process_inbound(owner, None, InboundEmailPayload(**flat), via="poll")
                     ingested += 1
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{inbox}: {str(exc)[:160]}")

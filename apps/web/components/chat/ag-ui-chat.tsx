@@ -51,6 +51,13 @@ import { ArtifactLinkCards } from "@/components/chat/artifact-link-cards"
 import { AgentActivity, activityEvent, emptyActivity, finishActivity, type Activity } from "@/components/chat/agent-activity"
 import { ChatWorkflows } from "@/components/workflows/chat-workflows"
 import { humanizeTool } from "@/lib/agent-activity"
+import { requestBrowserNotifications } from "@/lib/agent-run-notify"
+import {
+  getSession, takePendingOpen, setChatVisible, useChatSession, startRun, stopRun, resetSession, loadConversationInto, reattachRuns,
+  setMessages as storeSetMessages, setConversationId as storeSetConversationId, setSessionError,
+  type ChatMessage,
+} from "@/lib/agent-chat-store"
+import { parseMessage, type Artifact, type Segment } from "@/lib/chat-artifacts"
 import { artifactItemsFromToolCalls, openAppPath, safeAppPath, safeExternalUrl } from "@/lib/artifact-links"
 import {
   invokeAgentAGUI,
@@ -72,29 +79,7 @@ import { getSavedMicId, saveMicId, resolvePreferredMicId, micAudioConstraints } 
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-interface AGUIMessage {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  isStreaming?: boolean
-  activity?: Activity
-  toolCalls?: ToolCallEvent[]
-  memoryWrites?: { correlationId?: string; status?: string }[]
-  routedAgent?: string
-  routedAgentName?: string
-}
-
-export interface Artifact {
-  id: string
-  title: string
-  lang: string
-  code: string
-}
-
-export interface Segment {
-  type: "text" | "artifact"
-  value: string
-}
+type AGUIMessage = ChatMessage
 
 type AgentType = keyof typeof AGENT_CATALOG
 
@@ -142,72 +127,6 @@ const CHANNELS_LIST = [
   { id: "c-network", name: "network-alerts" },
   { id: "c-marketing", name: "marketing" },
 ]
-
-const FENCE = /```([^\n\r`]+)?\n?([\s\S]*?)```/g
-
-function extractArtifactTitle(code: string, langInfo: string, idx: number): string {
-  const titleAttr = langInfo.match(/title=["']([^"']+)["']/i)
-  if (titleAttr && titleAttr[1].trim()) {
-    return titleAttr[1].trim()
-  }
-
-  const lines = code.trim().split("\n")
-  for (let i = 0; i < Math.min(lines.length, 6); i++) {
-    const line = lines[i].trim()
-    const headingMatch = line.match(/^#{1,3}\s+([^#\n\r]+)/)
-    if (headingMatch && headingMatch[1].trim()) {
-      return headingMatch[1].trim().replace(/[*_`]/g, "")
-    }
-    const subjectMatch = line.match(/^Subject:\s*(.+)$/i)
-    if (subjectMatch && subjectMatch[1].trim()) {
-      return `Email: ${subjectMatch[1].trim()}`
-    }
-    const titleLineMatch = line.match(/^Title:\s*(.+)$/i)
-    if (titleLineMatch && titleLineMatch[1].trim()) {
-      return titleLineMatch[1].trim().replace(/[*_`]/g, "")
-    }
-  }
-
-  const lower = code.toLowerCase()
-  if (lower.includes("subject:") || lower.includes("dear ") || lower.includes("recipient:") || langInfo.includes("email")) {
-    return `Email Draft (${idx + 1})`
-  }
-  if (lower.includes("slide ") || lower.includes("presentation") || lower.includes("agenda") || langInfo.includes("presentation") || langInfo.includes("deck")) {
-    return `Presentation Outline (${idx + 1})`
-  }
-  if (lower.includes("strategy") || lower.includes("proposal") || lower.includes("action plan") || lower.includes("executive summary")) {
-    return `Strategy Proposal (${idx + 1})`
-  }
-  if (langInfo.includes("sql") || lower.includes("select ") || lower.includes("from ")) {
-    return `SQL Query (${idx + 1})`
-  }
-
-  return `Proposal Artifact ${idx + 1}`
-}
-
-function parseMessage(msgId: string, content: string): { segments: Segment[]; artifacts: Artifact[] } {
-  const segments: Segment[] = []
-  const artifacts: Artifact[] = []
-  let last = 0
-  let idx = 0
-  let m: RegExpExecArray | null
-  FENCE.lastIndex = 0
-  while ((m = FENCE.exec(content)) !== null) {
-    if (m.index > last) segments.push({ type: "text", value: content.slice(last, m.index) })
-    const rawLang = (m[1] || "text").trim()
-    const lang = rawLang.split(/[\s:]/)[0].toLowerCase() || "text"
-    const code = m[2] ?? ""
-    const id = `${msgId}-art-${idx}`
-    const title = extractArtifactTitle(code, rawLang, idx)
-    artifacts.push({ id, title, lang, code })
-    segments.push({ type: "artifact", value: id })
-    last = m.index + m[0].length
-    idx += 1
-  }
-  if (last < content.length) segments.push({ type: "text", value: content.slice(last) })
-  if (segments.length === 0) segments.push({ type: "text", value: content })
-  return { segments, artifacts }
-}
 
 // ── Markdown & Table Formatter Component ─────────────────────────────────
 
@@ -534,33 +453,31 @@ interface AGUIChatProps {
   initialDraft?: string
 }
 
+const CHAT_KEY = "floating"
+const setMessages = (u: ChatMessage[] | ((m: ChatMessage[]) => ChatMessage[])) => storeSetMessages(CHAT_KEY, u)
+const setConversationId = (id: string | null) => storeSetConversationId(CHAT_KEY, id)
+const setError = (e: string | null) => setSessionError(CHAT_KEY, e)
+
 export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContext, initialDraft }: AGUIChatProps) {
   const [modelChoices, setModelChoices] = useState<string[]>([])
   const [requestedModel, setRequestedModel] = useState("")
   useEffect(() => { if (isOpen) fetch("/api/orchestrator/llm-console/choices", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(d => { setModelChoices(d?.models || []); setRequestedModel("") }).catch(() => setModelChoices([])) }, [isOpen])
-  const [messages, setMessages] = useState<AGUIMessage[]>([])
+  const session = useChatSession(CHAT_KEY)
+  const { messages, isSending, conversationId, error } = session
   const [inputValue, setInputValue] = useState(initialDraft || "")
-  const [isSending, setIsSending] = useState(false)
-  const runController = useRef<AbortController | null>(null)
-  useEffect(() => () => runController.current?.abort(), [])
   const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "auto")
   const [showAgentPicker, setShowAgentPicker] = useState(false)
   const [panelSize, setPanelSize] = useState<"compact" | "wide" | "expanded">("compact")
   const [customArtifacts, setCustomArtifacts] = useState<Record<string, Artifact>>({})
   const [artifactViewMode, setArtifactViewMode] = useState<"preview" | "code">("preview")
   const [artifactRevisionPrompt, setArtifactRevisionPrompt] = useState("")
-  const [conversationId, setConversationId] = useState<string | null>(null)
   const [showWorkflows, setShowWorkflows] = useState(false)
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [context] = useState<Record<string, unknown>>(initialContext || {})
-  const [error, setError] = useState<string | null>(null)
-  const [streamState, setStreamState] = useState<AGUIStreamState>({
-    runId: "",
-    status: "idle",
-    content: "",
-    toolCalls: [],
-    memoryWrites: [],
-  })
+  const streamState = useMemo(() => ({
+    runId: session.runId,
+    status: isSending ? "running" : !session.runId && messages.length === 0 ? "idle" : error ? "error" : "finished",
+  }), [session.runId, isSending, error, messages.length])
 
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -783,7 +700,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     const artifactsById: Record<string, Artifact> = {}
     for (const msg of messages) {
       if (msg.role !== "assistant") continue
-      const { segments, artifacts } = parseMessage(msg.id, msg.content)
+      const { segments, artifacts } = parseMessage(msg.id, msg.content, !msg.isStreaming)
       segmentsByMsg[msg.id] = segments
       for (const a of artifacts) artifactsById[a.id] = a
     }
@@ -849,38 +766,14 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   }, [isOpen, loadHistory])
 
   const handleSelectConversation = async (id: string) => {
+    // A run still streaming into this conversation is already on screen: don't replace it with the stored copy.
+    if (getSession(CHAT_KEY).conversationId === id && getSession(CHAT_KEY).isSending) {
+      setShowHistory(false)
+      return
+    }
     setLoadingConvId(id)
     try {
-      const data = await getConversation(id)
-      const loaded: AGUIMessage[] = []
-      for (const m of data.messages || []) {
-        if (m.role === "user") {
-          loaded.push({
-            id: m.id || `${id}-${loaded.length}`,
-            role: "user",
-            content: m.content || "",
-          })
-        } else if (m.role === "assistant") {
-          const rawToolCalls = (m.tool_calls as any[]) || []
-          const rawToolResults = (m.tool_results as any[]) || []
-          const mappedToolCalls: ToolCallEvent[] = rawToolCalls.map((tc: any, idx: number) => ({
-            runId: id,
-            toolCallId: tc.id || `tc-${idx}`,
-            toolName: tc.name || "tool",
-            arguments: tc.arguments || {},
-            result: rawToolResults[idx] ?? tc.result,
-            status: "result" as const,
-          }))
-          loaded.push({
-            id: m.id || `${id}-${loaded.length}`,
-            role: "assistant",
-            content: m.content || "",
-            toolCalls: mappedToolCalls,
-          })
-        }
-      }
-      setMessages(loaded)
-      setConversationId(data.id)
+      const data = await loadConversationInto(CHAT_KEY, id)
       if (data.agent_type && AGENT_LIST.some((a) => a.type === data.agent_type)) {
         setSelectedAgent(data.agent_type as AgentType)
       }
@@ -892,14 +785,31 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     }
   }
 
+  useEffect(() => {
+    if (!isOpen) return
+    setChatVisible(CHAT_KEY, true)
+    return () => setChatVisible(CHAT_KEY, false)
+  }, [isOpen])
+
+  // Toast / bell click: "open the chat for this run".
+  useEffect(() => {
+    if (!isOpen) return
+    const id = takePendingOpen()
+    if (id) void handleSelectConversation(id)
+    const onOpen = (e: Event) => {
+      const wanted = (e as CustomEvent<{ conversationId?: string | null }>).detail?.conversationId
+      if (wanted && takePendingOpen() !== null) void handleSelectConversation(wanted)
+    }
+    window.addEventListener("open-agent-chat", onOpen)
+    return () => window.removeEventListener("open-agent-chat", onOpen)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
+
   const handleNewChat = () => {
-    setMessages([])
+    resetSession(CHAT_KEY)
     setInputValue("")
-    setConversationId(null)
-    setError(null)
     setActiveArtifact(null)
     setShowHistory(false)
-    setStreamState({ runId: "", status: "idle", content: "", toolCalls: [], memoryWrites: [] })
   }
 
   const handleDeleteConversation = async (e: React.MouseEvent, id: string) => {
@@ -931,212 +841,19 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     const rawText = textOverride !== undefined ? textOverride : inputValue
     if (!rawText.trim() || isSending) return
     setError(null)
-
-    const messageText = rawText.trim()
-
-    const userMessage: AGUIMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: messageText,
-    }
-
-    const assistantId = (Date.now() + 1).toString()
-    const streamingMessage: AGUIMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      isStreaming: true,
-      toolCalls: [],
-      memoryWrites: [],
-      activity: emptyActivity(),
-    }
-
-    setMessages((prev) => [...prev, userMessage, streamingMessage])
-    if (textOverride === undefined) {
-      setInputValue("")
-    }
-    setIsSending(true)
+    if (textOverride === undefined) setInputValue("")
     nearBottomRef.current = true
-    const controller = new AbortController()
-    runController.current = controller
-    setStreamState({ runId: "", status: "running", content: "", toolCalls: [], memoryWrites: [] })
-
-    try {
-      await invokeAgentAGUI(
-        {
-          agent_type: selectedAgent,
-          message: messageText,
-          context: {
-            ...context,
-            ...(requestedModel ? { requested_model: requestedModel } : {}),
-            conversation_id: conversationId,
-          },
-          conversation_id: conversationId || undefined,
-          stream_tokens: true,
-        },
-        (event: AGUIEvent) => {
-          setStreamState((prev) => {
-            const next = { ...prev }
-            next.runId = event.run_id
-
-            switch (event.type) {
-              case "CUSTOM":
-                setMessages(prevMsgs => prevMsgs.map(m => m.id === assistantId ? {
-                  ...m, activity: activityEvent(m.activity || emptyActivity(), String(event.data.name), event.data.value as Record<string, unknown> || {}),
-                } : m))
-                break
-              case "RUN_STARTED":
-                next.status = "running"
-                if (event.conversation_id) {
-                  setConversationId(event.conversation_id)
-                }
-                const routedType = event.data?.agent_type as string | undefined
-                const autoRouted = event.data?.auto_routed as boolean | undefined
-                if (routedType && (autoRouted || selectedAgent === "auto")) {
-                  const routedAgentObj = AGENT_LIST.find((a) => a.type === routedType)
-                  const routedName = routedAgentObj ? routedAgentObj.name : routedType
-                  setMessages((prevMsgs) =>
-                    prevMsgs.map((m) =>
-                      m.id === assistantId
-                        ? { ...m, routedAgent: routedType, routedAgentName: routedName }
-                        : m,
-                    ),
-                  )
-                }
-                break
-
-              case "TEXT_MESSAGE_CONTENT":
-                next.content += (event.data.delta as string) || ""
-                // Update the streaming message content
-                setMessages((prevMsgs) =>
-                  prevMsgs.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: next.content }
-                      : m,
-                  ),
-                )
-                break
-
-              case "TOOL_CALL_START":
-                next.toolCalls = [
-                  ...next.toolCalls,
-                  {
-                    runId: event.run_id,
-                    toolCallId: event.data.tool_call_id as string,
-                    toolName: event.data.tool_name as string,
-                    arguments: event.data.arguments as Record<string, unknown>,
-                    status: "start",
-                  },
-                ]
-                setMessages((prevMsgs) =>
-                  prevMsgs.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, toolCalls: next.toolCalls }
-                      : m,
-                  ),
-                )
-                break
-
-              case "TOOL_CALL_RESULT":
-                next.toolCalls = next.toolCalls.map((tc) =>
-                  tc.toolCallId === event.data.tool_call_id
-                    ? { ...tc, result: event.data.result, status: "result" as const }
-                    : tc,
-                )
-                setMessages((prevMsgs) =>
-                  prevMsgs.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, toolCalls: next.toolCalls }
-                      : m,
-                  ),
-                )
-                break
-
-              case "TOOL_CALL_END":
-                next.toolCalls = next.toolCalls.map((tc) =>
-                  tc.toolCallId === event.data.tool_call_id
-                    ? { ...tc, status: "end" as const }
-                    : tc,
-                )
-                break
-
-              case "MEMORY_WRITE":
-                next.memoryWrites = [
-                  ...next.memoryWrites,
-                  {
-                    runId: (event.data.run_id as string) ?? (event.data.correlation_id as string) ?? "",
-                    correlationId: event.data.correlation_id as string,
-                    status: event.data.status as string,
-                  },
-                ]
-                setMessages((prevMsgs) =>
-                  prevMsgs.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, memoryWrites: next.memoryWrites }
-                      : m,
-                  ),
-                )
-                break
-
-              case "RUN_FINISHED":
-                next.status = "finished"
-                if (event.conversation_id) {
-                  setConversationId(event.conversation_id)
-                }
-                setMessages((prevMsgs) =>
-                  prevMsgs.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, isStreaming: false, activity: m.activity ? finishActivity(m.activity) : undefined }
-                      : m,
-                  ),
-                )
-                void loadHistory()
-                break
-
-              case "RUN_ERROR":
-                next.status = "error"
-                next.error = event.data.error as string
-                setMessages((prevMsgs) =>
-                  prevMsgs.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          content: `⚠️ Error: ${event.data.error}`,
-                          isStreaming: false,
-                          activity: m.activity ? finishActivity(m.activity) : undefined,
-                        }
-                      : m,
-                  ),
-                )
-                break
-            }
-
-            return next
-          })
-        },
-        controller.signal,
-      )
-    } catch (err) {
-      const stopped = controller.signal.aborted
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: stopped ? m.content || "Stopped." : `⚠️ Error: ${err instanceof Error ? err.message : "Failed to reach agent"}`,
-                isStreaming: false,
-                activity: m.activity ? finishActivity(m.activity, Date.now(), stopped) : undefined,
-              }
-            : m,
-        ),
-      )
-      if (!stopped) setError(err instanceof Error ? err.message : "Agent error")
-      setStreamState((prev) => ({ ...prev, status: "error" }))
-    } finally {
-      runController.current = null
-      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, isStreaming: false, activity: m.activity ? finishActivity(m.activity) : undefined } : m))
-      setIsSending(false)
-    }
+    void requestBrowserNotifications()
+    // The run belongs to the chat store, not to this component: it keeps going if the panel closes or the user
+    // navigates, and the store tells the app-wide host (toast + browser notification) when it ends.
+    await startRun(CHAT_KEY, {
+      agentType: selectedAgent,
+      agentName: activeAgent.name,
+      message: rawText.trim(),
+      context: { ...context, ...(requestedModel ? { requested_model: requestedModel } : {}) },
+      agentNames: (type) => AGENT_LIST.find((a) => a.type === type)?.name,
+    })
+    void loadHistory()
   }
 
   const handleReviseArtifact = async () => {
@@ -1835,7 +1552,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 <Button
                   size="icon"
                   className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground"
-                  onClick={() => isSending ? runController.current?.abort() : void handleSendMessage()}
+                  onClick={() => isSending ? stopRun(CHAT_KEY) : void handleSendMessage()}
                   disabled={!isSending && !inputValue.trim()}
                   aria-label={isSending ? "Stop agent" : "Send message"}
                   title={isSending ? "Stop" : "Send message"}

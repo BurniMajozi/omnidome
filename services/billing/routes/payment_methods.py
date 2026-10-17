@@ -185,6 +185,14 @@ async def charge_saved_method(tenant_id, user_id, invoice_id, *, method_id=None,
                 {"status": "failed", "failure_reason": reason})
             session.query(PaystackInitialization).filter(PaystackInitialization.reference == reference).update({"status": "failed"})
         logger.warning("saved-card charge failed ref=%s attempt=%s reason=%s", reference, attempt, reason)
+        from services.common.ticket_events import EVENT_PAYMENT_FAILED, publish_standalone
+        await publish_standalone(
+            tenant_id, EVENT_PAYMENT_FAILED,
+            {"invoice_id": str(invoice_id) if invoice_id else None, "customer_id": str(customer_id) if customer_id else None,
+             "amount": cents / 100, "currency": "ZAR", "reason": reason, "attempt": attempt, "gateway": "paystack",
+             "reference": reference},
+            source="billing", subject=("invoice", invoice_id) if invoice_id else None,
+            idempotency_key=f"payfail:{reference}")
         return {"status": "failed", "reference": reference, "attempt": attempt, "reason": reason}
     return {"status": "pending", "reference": reference, "attempt": attempt, "paystack_status": status}
 

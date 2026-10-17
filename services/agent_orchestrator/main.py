@@ -258,6 +258,9 @@ from services.agent_orchestrator.insights.routes import router as insights_route
 app.include_router(insights_router, prefix="/api/insights")
 
 app.include_router(bus_events_router, prefix="/api/events")
+
+from services.agent_orchestrator.routes.jev_tickets import router as jev_tickets_router
+app.include_router(jev_tickets_router, prefix="/api/jev/tickets")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 
 

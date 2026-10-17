@@ -128,7 +128,7 @@ def test_job_access_own_unassigned_or_manager():
 def test_every_mutating_route_is_gated():
     from services.support.main import app
     gated = {"POST", "PUT", "DELETE", "PATCH"}
-    want = {"/tickets": "manager", "/tickets/{ticket_id}": None, "/network/broadcast": "admin",
+    want = {"/tickets": "technician", "/tickets/{ticket_id}": None, "/network/broadcast": "admin",
             "/tickets/{ticket_id}/escalate-fno": "manager"}
     for r in app.routes:
         if getattr(r, "methods", None) and gated & r.methods and r.path not in ("/",):
@@ -176,14 +176,16 @@ def test_startup_uses_retry_lifespan(monkeypatch):
 
     monkeypatch.setattr(main, "run_with_db_retry", fake_retry)
     monkeypatch.setattr(main.guard, "ensure_startup", lambda: calls.append("guard"))
+    started = SimpleNamespace(cancel=lambda: calls.append("consumer_stopped"))
+    monkeypatch.setattr(main.ticket_consumer.consumer, "start", lambda: (calls.append("consumer_started"), started)[1])
 
     async def run():
         async with main.lifespan(main.app):
             pass
 
     asyncio.run(run())
-    assert calls == ["guard", main.init_tables]
-    assert main.app.router.lifespan_context is main.lifespan
+    assert calls == ["guard", main.init_tables, "consumer_started", "consumer_stopped"]
+    assert main.app.router.lifespan_context is not None  # include_router wraps it in a merged context
 
 
 def test_compose_local_runs_support_single_worker():

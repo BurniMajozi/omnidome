@@ -224,6 +224,10 @@ async def finish_run(session,run,checkpoint,status,error=None):
     run.output=checkpoint["data"]["steps"]
     run.finished_at=None if status in {"running","awaiting_approval"} else datetime.now(timezone.utc)
     await session.flush()
+    if status=="failed":
+        from services.agent_orchestrator.failure_events import publish_run_failed
+        await publish_run_failed(session,run.tenant_id,agent=str(checkpoint.get("name") or "workflow"),run_id=run.id,
+                                 error=str(error or "workflow failed"),kind="workflow_run")
     if status in {"succeeded","failed"}:
         try:
             async with session.begin_nested():

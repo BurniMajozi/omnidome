@@ -414,6 +414,10 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row.lease_owner, row.lease_expires_at = None, None
             row.finished_at = datetime.now(timezone.utc)
             row.error = result.stopped_by if result.status in {"failed", "stopped_by_ceiling"} else None
+            if result.status == "failed":
+                from services.agent_orchestrator.failure_events import publish_run_failed
+                await publish_run_failed(session, tenant_id, agent=agent_type, run_id=job_id,
+                                         error=str(result.stopped_by or "run failed"))
     except PauseRequested:
         async with session_scope() as session:
             row = (await session.execute(select(AgentJob).where(AgentJob.id == job_id))).scalar_one()
@@ -424,6 +428,9 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row = (await session.execute(select(AgentJob).where(AgentJob.id == job_id))).scalar_one()
             row.status, row.error = "failed", "Run failed; review its checkpoint before resuming"
             row.lease_owner, row.lease_expires_at = None, None
+            from services.agent_orchestrator.failure_events import publish_run_failed
+            await publish_run_failed(session, tenant_id, agent=agent_type, run_id=job_id,
+                                     error="Run failed unexpectedly; see the run's checkpoint")
     finally:
         heartbeat_task.cancel()
         steps.current.reset(activity_token)
