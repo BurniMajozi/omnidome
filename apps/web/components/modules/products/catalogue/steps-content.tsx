@@ -1,11 +1,12 @@
 "use client"
 
-import { useRef, useState } from "react"
-import { Download, FileText, Plus, Star, Trash2, Upload } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { Download, ExternalLink, FileText, Loader2, Plus, Sparkles, Star, Trash2, Upload } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { deleteAsset, downloadAsset, uploadAsset, type Asset, type Competitor } from "@/lib/catalogue-api"
+import { getResearch, startResearch } from "@/lib/analytics-ai-api"
 import { AuthImage, Field, kpiSet, money, selectCls } from "./shared"
 import type { StepProps } from "./wizard-types"
 
@@ -161,6 +162,52 @@ export function StepResearch({ form, setDef, notify }: StepProps) {
   const kpis = d.research.kpis
   const setRows = (r: Competitor[]) => setDef({ research: { ...d.research, rows: r } })
   const upd = (i: number, patch: Partial<Competitor>) => setRows(rows.map((c, k) => (k === i ? { ...c, ...patch } : c)))
+  const market = d.research.market
+  const [running, setRunning] = useState(false)
+  const [researchError, setResearchError] = useState<string | null>(null)
+  const dRef = useRef(d)
+  dRef.current = d
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
+
+  /** Market research through BI Studio (Firecrawl search + cited synthesis, metered per tenant). */
+  async function runResearch() {
+    if (!form.name.trim()) return notify("Enter a product name first.")
+    setRunning(true)
+    setResearchError(null)
+    try {
+      const spec = [d.down && d.up ? `${d.down}/${d.up} Mbps` : "", form.family, form.range].filter(Boolean).join(", ")
+      const question = `What do South African competitors charge for ${d.customer_name || form.name}${spec ? ` (${spec})` : ""}, and what do they include?`
+      const started = await startResearch({ question, depth: "quick", country: "za" })
+      let cur = started
+      const deadline = Date.now() + 3 * 60_000
+      while (alive.current && (cur.status === "queued" || cur.status === "running") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000))
+        cur = await getResearch(started.id)
+      }
+      if (!alive.current) return
+      if (cur.status === "failed") throw new Error(cur.error || "The research run failed.")
+      if (cur.status !== "done") throw new Error("Research is still running. Open BI Studio to see it finish, then run it again here.")
+      const latest = dRef.current
+      setDef({
+        research: {
+          ...latest.research,
+          market: {
+            run_id: cur.id,
+            checked_at: new Date().toISOString(),
+            summary: cur.report?.summary ?? "",
+            findings: (cur.report?.key_findings ?? []).map((f) => ({ claim: f.claim, source_ids: f.source_ids })),
+            sources: (cur.sources ?? []).map((s) => ({ id: s.id, title: s.title, url: s.url, domain: s.domain })),
+          },
+        },
+      })
+      notify(`Research finished: ${cur.source_count} source(s). Review it, then save the draft.`)
+    } catch (e) {
+      setResearchError(e instanceof Error ? e.message : "Research failed.")
+    } finally {
+      if (alive.current) setRunning(false)
+    }
+  }
   const prices = rows.map((r) => Number(r.price)).filter((n) => n > 0).sort((a, b) => a - b)
   const median = prices.length ? (prices.length % 2 ? prices[(prices.length - 1) / 2] : (prices[prices.length / 2 - 1] + prices[prices.length / 2]) / 2) : 0
   const mine = Number(d.price)
@@ -176,9 +223,43 @@ export function StepResearch({ form, setDef, notify }: StepProps) {
           <h4 className="text-xs font-semibold text-foreground">Competitor analysis</h4>
           <div className="flex gap-2">
             <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => setRows([...rows, { name: "", offer: "", price: "", spec: "", term: "", date: new Date().toISOString().slice(0, 10), source: "" }])}><Plus className="h-3.5 w-3.5" /> Add competitor</Button>
-            <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => notify("Automated research needs a web-research connector, which is not connected. Add competitors manually for now.")}>✦ Research with AI</Button>
+            <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs" disabled={running} onClick={() => void runResearch()}>
+              {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} {running ? "Researching…" : "Research with AI"}
+            </Button>
           </div>
         </div>
+        {researchError && <p className="text-xs text-red-400" role="alert">{researchError}</p>}
+        {running && <p className="text-xs text-muted-foreground" role="status">Searching the web and reading the top pages. This usually takes under a minute and uses BI Studio research credits.</p>}
+        {market && (
+          <div className="rounded-lg border border-primary/40 bg-primary/5 p-3.5 text-xs" aria-label="AI market research">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <strong className="text-foreground">Market research · {new Date(market.checked_at).toLocaleDateString("en-ZA")}</strong>
+              <Button type="button" variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setDef({ research: { ...d.research, market: null } })}>Remove</Button>
+            </div>
+            {market.summary ? <p className="mt-2 text-foreground">{market.summary}</p> : <p className="mt-2 text-muted-foreground">No supported summary was produced.</p>}
+            {market.findings.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
+                {market.findings.map((f, i) => <li key={i}>{f.claim} <span className="text-primary">{f.source_ids.map((s) => `[${s}]`).join("")}</span></li>)}
+              </ul>
+            )}
+            {market.sources.length > 0 && (
+              <div className="mt-3 space-y-1">
+                <div className="font-medium text-foreground">Sources</div>
+                {market.sources.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5">
+                    <span className="min-w-0 truncate"><span className="text-primary">[{s.id}]</span> {s.title || s.domain}</span>
+                    <span className="flex shrink-0 gap-1">
+                      <a href={s.url} target="_blank" rel="noopener noreferrer" className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border hover:text-primary" aria-label={`Open ${s.domain}`}><ExternalLink className="h-3.5 w-3.5" /></a>
+                      <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" disabled={rows.some((r) => r.source === s.url)}
+                        onClick={() => setRows([...rows, { name: s.domain, offer: s.title || "", price: "", spec: "", term: "", date: new Date().toISOString().slice(0, 10), source: s.url }])}>Add as competitor</Button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-muted-foreground">AI-generated from the pages listed, via BI Studio (Firecrawl). Check the sources and enter prices yourself before relying on it.</p>
+          </div>
+        )}
         {rows.length === 0 && <p className="text-xs text-muted-foreground">No competitors recorded.</p>}
         {rows.map((c, i) => (
           <div key={i} className="rounded-lg border border-border bg-card/60 p-3">

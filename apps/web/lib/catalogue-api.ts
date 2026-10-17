@@ -44,7 +44,9 @@ async function call<T>(path: string, init?: RequestInit & { json?: unknown }): P
   if (!res.ok) {
     let detail: unknown
     try {
-      detail = (await res.json())?.detail
+      const body = await res.json()
+      // FastAPI uses {detail}; the Next proxy uses {error, detail}.
+      detail = typeof body?.detail === "string" && body?.error ? `${body.error}: ${body.detail}` : (body?.detail ?? body?.error)
     } catch {
       detail = undefined
     }
@@ -94,6 +96,16 @@ export interface Asset {
   effective: string
   acceptance: boolean
 }
+export interface ResearchFinding { claim: string; source_ids: string[] }
+export interface ResearchSourceRef { id: string; title: string; url: string; domain: string }
+/** AI-assisted market research (Firecrawl via the BI Studio research API), kept with the product so it persists and is indexed. */
+export interface MarketResearch {
+  run_id: string
+  checked_at: string
+  summary: string
+  findings: ResearchFinding[]
+  sources: ResearchSourceRef[]
+}
 export interface Competitor { name: string; offer: string; price: number | string | null; spec: string; term: string; date: string; source: string }
 export interface TestResult { name: string; result: "Pending" | "Pass" | "Fail" | "Waived"; tester: string; date: string; notes: string; evidence: string }
 export interface IcasaItem {
@@ -126,7 +138,7 @@ export interface Definition {
   media: Asset[]
   documents: Asset[]
   policy_refs: string[]
-  research: { rows: Competitor[]; kpis: string[] }
+  research: { rows: Competitor[]; kpis: string[]; market?: MarketResearch | null }
   readiness: {
     tests_required: boolean
     tests_exempt_reason: string

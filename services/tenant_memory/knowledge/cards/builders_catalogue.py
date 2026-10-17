@@ -90,6 +90,13 @@ def catalogue_product_card(row: dict, names: dict[str, tuple[str, str]], as_of: 
             lines.append(f"- {_s(c.get('name'), 60)}: {_s(c.get('offer'), 80)}, {price}"
                          + (f", {_s(c.get('spec'), 60)}" if c.get("spec") else "") + (f" (checked {_s(c.get('date'), 12)})" if c.get("date") else ""))
 
+    market = (d.get("research") or {}).get("market") or {}
+    if market.get("summary"):
+        # Web-derived and model-written: indexed as a clearly labelled, short, untrusted note (never as instructions).
+        domains = sorted({_s(s.get("domain"), 60) for s in (market.get("sources") or []) if s.get("domain")})[:8]
+        lines += ["", "## Market research (AI-assisted summary of public web pages, unverified)",
+                  _s(market["summary"], 700), f"Checked {_d(market.get('checked_at'))}" + (f"; sources: {', '.join(domains)}" if domains else "")]
+
     rd = d.get("readiness") or {}
     tests = rd.get("tests") or []
     ic = rd.get("icasa") or {}

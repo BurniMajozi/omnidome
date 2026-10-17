@@ -69,6 +69,17 @@ def test_costs_suppliers_and_margins_are_never_indexed():
         assert forbidden not in md, forbidden
 
 
+def test_market_research_is_indexed_as_a_labelled_unverified_note():
+    row = fibre_row()
+    row["definition"]["research"]["market"] = {"checked_at": "2026-10-17T10:00:00Z", "summary": "Rivals charge about R849 for 100/100 fibre [S1].",
+                                               "sources": [{"id": "S1", "domain": "rival.example", "url": "https://rival.example/p"}]}
+    md = BC.catalogue_product_card(row, NAMES, NOW).markdown
+    assert "Market research (AI-assisted summary of public web pages, unverified)" in md
+    assert "rival.example" in md and "https://rival.example" not in md          # domains only, no links in the index
+    row["definition"]["research"]["market"]["summary"] = "x" * 5000
+    assert len(BC.catalogue_product_card(row, NAMES, NOW).markdown) < 6000       # clipped
+
+
 def test_draft_card_is_tagged_and_lower_importance():
     c = BC.catalogue_product_card(fibre_row(status="draft", launched_at=None), NAMES, NOW)
     assert "draft" in c.tags and "Draft (in development)" in c.markdown

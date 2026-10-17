@@ -59,7 +59,10 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
       headers: responseHeaders,
     })
   } catch (err) {
-    return NextResponse.json({ error: "Inventory service unreachable" }, { status: 502 })
+    // Say why (timeout, connection refused, signing failure) so a 502 can be diagnosed from the browser and the logs.
+    const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+    console.error(`[svc/inventory] ${request.method} /${pathStr} failed: ${reason}`)
+    return NextResponse.json({ error: "Inventory service unreachable", detail: reason.slice(0, 200) }, { status: 502 })
   }
 }
 

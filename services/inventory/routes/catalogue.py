@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id, get_current_user_id
@@ -86,9 +86,38 @@ class Competitor(_Loose):
     source: str = ""
 
 
+class ResearchFinding(_Loose):
+    claim: str = Field("", max_length=600)
+    source_ids: list[str] = Field([], max_length=15)
+
+
+class ResearchSource(_Loose):
+    id: str = Field("", max_length=12)
+    title: str = Field("", max_length=300)
+    url: str = Field("", max_length=600)
+    domain: str = Field("", max_length=200)
+
+    @field_validator("url")
+    @classmethod
+    def _http_only(cls, v: str) -> str:
+        if v and not v.lower().startswith(("http://", "https://")):
+            raise ValueError("source links must be http(s)")
+        return v
+
+
+class MarketResearch(_Loose):
+    """AI-assisted research from the BI Studio research API (Firecrawl + cited synthesis), kept with the product."""
+    run_id: str = Field("", max_length=64)
+    checked_at: str = Field("", max_length=40)
+    summary: str = Field("", max_length=2000)
+    findings: list[ResearchFinding] = Field([], max_length=20)
+    sources: list[ResearchSource] = Field([], max_length=15)
+
+
 class Research(_Loose):
     rows: list[Competitor] = []
     kpis: list[str] = []
+    market: Optional[MarketResearch] = None
 
 
 class TestResult(_Loose):

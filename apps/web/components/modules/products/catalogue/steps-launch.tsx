@@ -166,7 +166,12 @@ export function StepLaunch({ form, setDef, preview, notify }: StepProps) {
 
 // ── Step 8: review and launch ────────────────────────────────────────────────
 
-export function StepReview({ form, preview, products, onLaunch, launching }: StepProps & { onLaunch: () => void; launching: boolean }) {
+/** Which wizard step fixes each launch check. */
+const FIX_STEP: Record<string, number> = { definition: 0, classification: 0, costs: 1, components: 2, price: 3, testing: 6, icasa: 6, icasa_product: 6, icasa_promotion: 6 }
+
+export function StepReview({ form, preview, products, onLaunch, launching, previewError, onRetry, goto }: StepProps & {
+  onLaunch: () => void; launching: boolean; previewError: string | null; onRetry: () => void; goto: (step: number) => void
+}) {
   const d = form.definition
   const checks = preview?.checks ?? []
   const ok = preview?.ready_to_launch ?? false
@@ -210,16 +215,25 @@ export function StepReview({ form, preview, products, onLaunch, launching }: Ste
       <div className="rounded-lg border border-border p-4" id="launch-card">
         <h4 className="text-xs font-semibold text-foreground">Launch requirements</h4>
         <ul className="mt-2 space-y-1">
-          {checks.length === 0 && <li className="text-xs text-muted-foreground">Checking…</li>}
+          {checks.length === 0 && !previewError && <li className="text-xs text-muted-foreground">Checking…</li>}
+          {previewError && (
+            <li className="flex flex-wrap items-center gap-2 text-xs text-red-400" role="alert">
+              Could not check the launch requirements ({previewError}).{checks.length > 0 ? " The list below may be out of date." : ""}
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={onRetry}>Retry</Button>
+            </li>
+          )}
           {checks.map((c, i) => (
-            <li key={i} className={`text-xs ${c.ok ? "text-emerald-400" : "text-amber-400"}`}>
-              {c.ok ? "✓" : "○"} {c.label}{c.detail && <span className="text-muted-foreground"> · {c.detail}</span>}
+            <li key={i} className={`flex flex-wrap items-center gap-2 text-xs ${c.ok ? "text-emerald-400" : "text-amber-400"}`}>
+              <span>{c.ok ? "✓" : "○"} {c.label}{c.detail && <span className="text-muted-foreground"> · {c.detail}</span>}</span>
+              {!c.ok && FIX_STEP[c.key] !== undefined && (
+                <button type="button" className="text-[11px] font-medium text-primary underline" onClick={() => goto(FIX_STEP[c.key])}>Fix in step {FIX_STEP[c.key] + 1} →</button>
+              )}
             </li>
           ))}
         </ul>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <span className="text-xs text-muted-foreground">{active ? "This product is already active." : ok ? "All requirements met." : "Complete the open items to unlock launch."}</span>
-          <Button type="button" className="gap-1.5" disabled={!ok || active || launching} onClick={onLaunch}><Rocket className="h-4 w-4" /> {launching ? "Launching…" : "Launch product"}</Button>
+          <Button type="button" className="gap-1.5" disabled={!ok || active || launching || !!previewError} onClick={onLaunch}><Rocket className="h-4 w-4" /> {launching ? "Launching…" : "Launch product"}</Button>
         </div>
       </div>
     </div>

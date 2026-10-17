@@ -373,6 +373,25 @@ def test_preview_reports_the_same_launch_checks_without_saving():
     _run(case())
 
 
+def test_market_research_is_stored_and_unsafe_links_are_refused():
+    async def case():
+        c, _, engine = await _client()
+        try:
+            body = _body()
+            body["definition"]["research"] = {"rows": [], "kpis": [], "market": {
+                "run_id": "r1", "checked_at": "2026-10-17T10:00:00Z", "summary": "Rivals charge R899 [S1].",
+                "findings": [{"claim": "Rival A charges R899", "source_ids": ["S1"]}],
+                "sources": [{"id": "S1", "title": "Rival A", "url": "https://rival.example/fibre", "domain": "rival.example"}]}}
+            r = await c.post("/catalogue/products", json=body)
+            assert r.status_code == 201, r.text
+            assert r.json()["definition"]["research"]["market"]["sources"][0]["domain"] == "rival.example"
+            body["definition"]["research"]["market"]["sources"][0]["url"] = "javascript:alert(1)"
+            assert (await c.post("/catalogue/products", json=body)).status_code == 422
+        finally:
+            await c.aclose(); await engine.dispose()
+    _run(case())
+
+
 def test_costs_hidden_without_write_access():
     async def case():
         c, _, engine = await _client(roles=("viewer",))
