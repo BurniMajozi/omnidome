@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { deleteAsset, downloadAsset, uploadAsset, type Asset, type Competitor } from "@/lib/catalogue-api"
 import { getResearch, startResearch } from "@/lib/analytics-ai-api"
+import { UsageIndicator } from "@/components/modules/analytics/shared"
 import { AuthImage, Field, kpiSet, money, selectCls } from "./shared"
 import type { StepProps } from "./wizard-types"
 
@@ -165,6 +166,7 @@ export function StepResearch({ form, setDef, notify }: StepProps) {
   const market = d.research.market
   const [running, setRunning] = useState(false)
   const [researchError, setResearchError] = useState<string | null>(null)
+  const [meterKey, setMeterKey] = useState(0)
   const dRef = useRef(d)
   dRef.current = d
   const alive = useRef(true)
@@ -194,6 +196,7 @@ export function StepResearch({ form, setDef, notify }: StepProps) {
           ...latest.research,
           market: {
             run_id: cur.id,
+            credits: cur.credits_used ?? 0,
             checked_at: new Date().toISOString(),
             summary: cur.report?.summary ?? "",
             findings: (cur.report?.key_findings ?? []).map((f) => ({ claim: f.claim, source_ids: f.source_ids })),
@@ -205,7 +208,7 @@ export function StepResearch({ form, setDef, notify }: StepProps) {
     } catch (e) {
       setResearchError(e instanceof Error ? e.message : "Research failed.")
     } finally {
-      if (alive.current) setRunning(false)
+      if (alive.current) { setRunning(false); setMeterKey((k) => k + 1) }   // refresh the credit meter after every run, even a failed one
     }
   }
   const prices = rows.map((r) => Number(r.price)).filter((n) => n > 0).sort((a, b) => a - b)
@@ -228,12 +231,13 @@ export function StepResearch({ form, setDef, notify }: StepProps) {
             </Button>
           </div>
         </div>
+        <UsageIndicator refreshKey={meterKey} />
         {researchError && <p className="text-xs text-red-400" role="alert">{researchError}</p>}
         {running && <p className="text-xs text-muted-foreground" role="status">Searching the web and reading the top pages. This usually takes under a minute and uses BI Studio research credits.</p>}
         {market && (
           <div className="rounded-lg border border-primary/40 bg-primary/5 p-3.5 text-xs" aria-label="AI market research">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <strong className="text-foreground">Market research · {new Date(market.checked_at).toLocaleDateString("en-ZA")}</strong>
+              <strong className="text-foreground">Market research · {new Date(market.checked_at).toLocaleDateString("en-ZA")}{market.credits ? ` · ${market.credits} credit${market.credits === 1 ? "" : "s"} used` : ""}</strong>
               <Button type="button" variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setDef({ research: { ...d.research, market: null } })}>Remove</Button>
             </div>
             {market.summary ? <p className="mt-2 text-foreground">{market.summary}</p> : <p className="mt-2 text-muted-foreground">No supported summary was produced.</p>}

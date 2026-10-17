@@ -101,6 +101,7 @@ export interface ResearchSourceRef { id: string; title: string; url: string; dom
 /** AI-assisted market research (Firecrawl via the BI Studio research API), kept with the product so it persists and is indexed. */
 export interface MarketResearch {
   run_id: string
+  credits?: number
   checked_at: string
   summary: string
   findings: ResearchFinding[]

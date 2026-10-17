@@ -108,6 +108,7 @@ class ResearchSource(_Loose):
 class MarketResearch(_Loose):
     """AI-assisted research from the BI Studio research API (Firecrawl + cited synthesis), kept with the product."""
     run_id: str = Field("", max_length=64)
+    credits: int = Field(0, ge=0, le=100000)
     checked_at: str = Field("", max_length=40)
     summary: str = Field("", max_length=2000)
     findings: list[ResearchFinding] = Field([], max_length=20)

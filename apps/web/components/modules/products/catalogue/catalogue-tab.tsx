@@ -51,6 +51,22 @@ export function CatalogueTab({ onCatalogueChanged }: Props) {
   const open = (p: Product | null) => setEditor({ open: true, product: p })
   const viewById = (id: string) => { const p = products.find((x) => x.id === id); if (p) setDetail(p) }
 
+  // The journey is a page of the platform, not a popup: it takes the place of the directory while editing.
+  if (editor.open) {
+    return (
+      <>
+        <ProductWizard
+          open product={editor.product} products={products} lists={lists} reloadLists={reloadLists}
+          onClose={() => setEditor({ open: false, product: null })} onChanged={reload} onView={viewById}
+        />
+        <ProductDetail
+          product={detail} products={products} onClose={() => setDetail(null)} onChanged={reload}
+          onEdit={(p) => open(p)} onOpen={(p) => setDetail(p)} canEdit={false}
+        />
+      </>
+    )
+  }
+
   return (
     <div className="space-y-5">
       <div className="inline-flex rounded-lg border border-border bg-card/60 p-0.5" role="tablist" aria-label="Catalogue views">
@@ -105,11 +121,7 @@ export function CatalogueTab({ onCatalogueChanged }: Props) {
 
       <ProductDetail
         product={detail} products={products} onClose={() => setDetail(null)} onChanged={reload}
-        onEdit={(p) => open(p)} onOpen={(p) => setDetail(p)} canEdit={!editor.open}
-      />
-      <ProductWizard
-        open={editor.open} product={editor.product} products={products} lists={lists} reloadLists={reloadLists}
-        onClose={() => setEditor({ open: false, product: null })} onChanged={reload} onView={viewById}
+        onEdit={(p) => open(p)} onOpen={(p) => setDetail(p)}
       />
     </div>
   )

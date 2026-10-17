@@ -1,9 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, Save, Send } from "lucide-react"
+import { ArrowLeft, ChevronLeft, ChevronRight, Save, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   blankDefinition, createProduct, launchProduct, previewProduct, updateProduct,
   type Definition, type Lists, type Product,
@@ -45,7 +44,7 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
   const [dirty, setDirty] = useState(false)
   const formRef = useRef(form)
   formRef.current = form
-  const body = useRef<HTMLDivElement>(null)
+  const top = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -70,7 +69,7 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
     return () => { live = false; clearTimeout(t) }
   }, [open, form, previewTick])
 
-  useEffect(() => { body.current?.scrollTo({ top: 0 }); setMessage((m) => (m?.error ? null : m)) }, [step])
+  useEffect(() => { top.current?.scrollIntoView({ block: "start", behavior: "smooth" }); setMessage((m) => (m?.error ? null : m)) }, [step])
 
   const set = useCallback((patch: Partial<Form>) => { setDirty(true); setForm((f) => ({ ...f, ...patch })) }, [])
   const setDef = useCallback((patch: Partial<Definition>) => { setDirty(true); setForm((f) => ({ ...f, definition: { ...f.definition, ...patch } })) }, [])
@@ -134,16 +133,25 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
   const props = { form, set, setDef, products, lists, reloadLists, preview, ensureSaved, notify, locked: form.status === "active", onView }
   const title = form.id ? `Edit ${form.name || "product"}` : "Develop a product"
 
+  if (!open) return null
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) requestClose() }}>
-      <DialogContent className="flex h-[92vh] w-[96vw] max-w-5xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border px-6 py-4 text-left">
+    <section ref={top} className="scroll-mt-4 space-y-4" aria-label="Product journey">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <Button type="button" variant="ghost" size="sm" className="-ml-2 mb-1 h-7 gap-1.5 px-2 text-xs text-muted-foreground" onClick={requestClose}>
+            <ArrowLeft className="h-3.5 w-3.5" /> Product Directory
+          </Button>
           <div className="text-[11px] font-medium uppercase tracking-wider text-primary">{form.id ? `${form.product_number} · ${form.status.replace("_", " ")}` : "New catalogue entry"}</div>
-          <DialogTitle className="text-lg">{title}</DialogTitle>
-          <DialogDescription className="sr-only">Define, cost, price, test and launch a product.</DialogDescription>
-        </DialogHeader>
+          <h2 className="text-xl font-bold tracking-tight text-foreground">{title}</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void onSave(false)} className="gap-1.5"><Save className="h-3.5 w-3.5" /> Save draft</Button>
+          {dirty && <span className="text-[11px] text-amber-400">Unsaved changes</span>}
+        </div>
+      </div>
 
-        <div className="flex gap-1.5 overflow-x-auto border-b border-border px-6 py-3" role="tablist" aria-label="Product journey steps">
+      <div className="rounded-xl border border-border bg-card/60">
+        <div className="flex gap-1.5 overflow-x-auto border-b border-border px-4 py-3" role="tablist" aria-label="Product journey steps">
           {STEPS.map((s, i) => (
             <button
               key={s} type="button" role="tab" aria-selected={step === i}
@@ -156,12 +164,12 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
         </div>
 
         {message && (
-          <div className={`border-b px-6 py-2 text-xs ${message.error ? "border-red-500/40 bg-red-500/10 text-red-300" : "border-border bg-primary/5 text-foreground"}`} role={message.error ? "alert" : "status"} aria-live="polite">
+          <div className={`border-b px-5 py-2 text-xs ${message.error ? "border-red-500/40 bg-red-500/10 text-red-300" : "border-border bg-primary/5 text-foreground"}`} role={message.error ? "alert" : "status"} aria-live="polite">
             {message.text} <button type="button" className="ml-2 text-muted-foreground underline" onClick={() => setMessage(null)}>dismiss</button>
           </div>
         )}
 
-        <div ref={body} className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="px-5 py-5">
           {step === 0 && <StepDefinition {...props} />}
           {step === 1 && <StepSourcing {...props} />}
           {step === 2 && <StepIncluded {...props} />}
@@ -172,11 +180,10 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
           {step === 7 && <StepReview {...props} onLaunch={onLaunch} launching={launching} previewError={previewError} onRetry={() => setPreviewTick((n) => n + 1)} goto={setStep} />}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-6 py-3">
-          <Button type="button" variant="ghost" size="sm" onClick={requestClose}>Cancel</Button>
+        <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 rounded-b-xl border-t border-border bg-background/95 px-5 py-3 backdrop-blur">
+          <Button type="button" variant="ghost" size="sm" onClick={requestClose}>Back to directory</Button>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" disabled={step === 0} onClick={() => setStep(step - 1)} className="gap-1"><ChevronLeft className="h-3.5 w-3.5" /> Back</Button>
-            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void onSave(false)} className="gap-1.5"><Save className="h-3.5 w-3.5" /> Save draft</Button>
+            <Button type="button" variant="outline" size="sm" disabled={step === 0} onClick={() => setStep(step - 1)} className="gap-1"><ChevronLeft className="h-3.5 w-3.5" /> Previous</Button>
             {step < STEPS.length - 1 ? (
               <Button type="button" size="sm" onClick={() => setStep(step + 1)} className="gap-1">Continue <ChevronRight className="h-3.5 w-3.5" /></Button>
             ) : (
@@ -184,7 +191,7 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
             )}
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </section>
   )
 }
