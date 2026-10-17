@@ -91,6 +91,16 @@ def test_source_registered_and_sql_never_selects_costs():
     assert src.count("tenant_id = CAST(:") >= 3                  # every query is tenant filtered
 
 
+def test_worker_import_order_has_no_circular_import():
+    """The indexer worker imports sources_ext first. A module-level import of sources_ext from sources_catalogue is circular
+    and crash-looped the knowledge_indexer container; each entry point must import cleanly in a fresh interpreter."""
+    import subprocess, sys
+    for entry in ("services.tenant_memory.knowledge.cards.sources_ext", "services.tenant_memory.knowledge.cards.sources",
+                  "services.tenant_memory.knowledge.cards.sources_catalogue", "services.tenant_memory.knowledge.worker"):
+        r = subprocess.run([sys.executable, "-c", f"import {entry}"], capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, f"{entry}: {r.stderr[-400:]}"
+
+
 class FakeCatalogue:
     def __init__(self):
         self.rows = {FIBRE: fibre_row()}

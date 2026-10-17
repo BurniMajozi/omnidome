@@ -11,13 +11,16 @@ from typing import Optional
 from services.tenant_memory.knowledge.cards import builders_catalogue as BC
 from services.tenant_memory.knowledge.cards import sources as S
 from services.tenant_memory.knowledge.cards.builders_ext import jsonish
-from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable, table_exists
+
+# sources_ext is imported lazily (inside the functions): sources.py imports this module at its very end, and the
+# worker imports sources_ext first, so a module-level import here is circular and crash-loops the indexer.
 
 _COLS = ("t.product_number, t.name, t.category, t.range, t.family, t.nature, t.usage, t.status, t.owner, "
          "t.launched_at, (t.definition - 'costs' - 'supplier') AS definition")
 
 
 async def fetch_catalogue(session, tenant: str, wm: Optional[dict], limit: int) -> S.Page:
+    from services.tenant_memory.knowledge.cards.sources_ext import table_exists
     if not await table_exists(session, "catalogue_products"):
         return S.Page()
     ks, kp = S._keyset("t.updated_at", "t.id::text", wm)
@@ -42,6 +45,7 @@ async def fetch_catalogue(session, tenant: str, wm: Optional[dict], limit: int) 
 
 
 async def ids_catalogue(session, tenant: str) -> dict:
+    from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable, table_exists
     if not await table_exists(session, "catalogue_products"):
         raise SourceUnavailable("table catalogue_products does not exist; refusing to reconcile catalogue_products")
     rows = await S._rows(session, "SELECT id::text AS id FROM catalogue_products WHERE tenant_id = CAST(:t AS uuid)", {"t": tenant})
