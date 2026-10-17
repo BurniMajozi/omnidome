@@ -14,7 +14,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.iot.database import get_session
 from services.iot.ha_client import HAWebSocketClient, ha_http_error, token_for_integration
 from services.iot.households import home_for, audit, client_for, sync_home
-from services.iot.home_events import emit
+from services.iot.home_events import emit, report_failure
 from services.iot.managed_gateway import target_for
 from services.iot.models import IoTHomeEntity
 from services.iot.routes.homes import enabled, entity_for
@@ -78,6 +78,11 @@ def public_step(data):
     }
 
 
+def is_customer_error(exc):
+    """Wrong details, expired session, bad token: the customer's to fix, not a ticket."""
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (400, 401, 403, 404)
+
+
 def flow_failure(exc):
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
@@ -129,8 +134,10 @@ async def activate_gateway(home_id: uuid.UUID, body: GatewayLogin, ctx: AuthCont
     except gw.BadCredentials as exc:
         raise HTTPException(422, str(exc)) from exc
     except gw.GatewayUnavailable as exc:
+        await report_failure(ctx.tenant_id, home_id, "iot.gateway.failed", str(exc))
         raise HTTPException(503, str(exc)) from exc
     except Exception as exc:
+        await report_failure(ctx.tenant_id, home_id, "iot.gateway.failed", type(exc).__name__)
         raise ha_http_error(exc) from exc
     async with get_session() as session:
         home = await home_for(session, ctx, home_id, owner_only=True)
@@ -152,6 +159,8 @@ async def start_setup(home_id: uuid.UUID, domain: str, ctx: AuthContext = Depend
     try:
         return public_step(await client.config_flow("POST", body={"handler": domain, "show_advanced_options": False}))
     except Exception as exc:
+        if not is_customer_error(exc):
+            await report_failure(ctx.tenant_id, home_id, "iot.integration.failed", type(exc).__name__, integration=domain)
         flow_failure(exc)
     finally:
         await client.aclose()
@@ -168,6 +177,8 @@ async def continue_setup(home_id: uuid.UUID, flow_id: str, body: FlowInput, ctx:
     try:
         step = public_step(await client.config_flow("POST", flow_id, values))
     except Exception as exc:
+        if not is_customer_error(exc):
+            await report_failure(ctx.tenant_id, home_id, "iot.integration.failed", type(exc).__name__)
         flow_failure(exc)
     finally:
         await client.aclose()

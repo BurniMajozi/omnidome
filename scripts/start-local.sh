@@ -44,8 +44,8 @@ fi
 # Optional services can be started explicitly with docker compose, or with
 # OMNIDOME_LOCAL_PROFILE=extended for the former auto-start set.
 case "${OMNIDOME_LOCAL_PROFILE:-core}" in
-  core) SERVICES="admin crm sales communication web" ;;
-  extended) SERVICES="admin crm sales communication web gateway marketing iot tenant_memory agent-orchestrator" ;;
+  core) SERVICES="admin crm sales communication tenant_memory agent-orchestrator fno_intelligence web" ;;
+  extended) SERVICES="admin crm sales communication tenant_memory agent-orchestrator fno_intelligence web gateway marketing iot" ;;
   *) echo "[start-local] unknown profile" >&2; exit 2 ;;
 esac
 
