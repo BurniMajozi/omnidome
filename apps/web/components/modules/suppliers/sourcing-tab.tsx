@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { listProducts, type Product } from "@/lib/catalogue-api"
+import { inventoryCall, listProducts, type Product } from "@/lib/catalogue-api"
 import {
   awardRequest, compareRequest, convertProspect, createRequest, editRequest, getCandidates, getDiscovery, getReorder, getRequest, listProspects,
   listRequests, parseReply, patchProspect, recordResponse, requestAction, runScan, sendRequest, startDiscovery,
@@ -373,11 +373,17 @@ function CompareTable({ cmp, request, notify, onChanged }: { cmp: Comparison; re
   const [reason, setReason] = useState("")
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<Awaited<ReturnType<typeof awardRequest>> | null>(null)
+  const [addSource, setAddSource] = useState(true)
+  const [preferred, setPreferred] = useState(false)
+  const [createPo, setCreatePo] = useState(true)
+  const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([])
+  const [warehouse, setWarehouse] = useState("")
+  useEffect(() => { inventoryCall<{ id: string; name: string }[]>("/warehouses").then(setWarehouses).catch(() => setWarehouses([])) }, [])
   const scored = cmp.rows.filter((x) => x.score !== null)
   if (cmp.rows.every((x) => x.score === null && !x.declined)) return <p className="text-xs text-muted-foreground">No replies yet. Record each supplier&apos;s reply to compare them.</p>
   async function award(inviteeId: string) {
     setBusy(true)
-    try { const a = await awardRequest(request.id, inviteeId, reason); setResult(a); notify(`${a.name} chosen.`); onChanged() } catch (e) { notify(errText(e, "Could not award"), true) } finally { setBusy(false) }
+    try { const a = await awardRequest(request.id, inviteeId, { reason, add_source: addSource, make_preferred: preferred, create_po: createPo, warehouse_id: warehouse || null }); setResult(a); notify(`${a.name} chosen.`); onChanged() } catch (e) { notify(errText(e, "Could not award"), true) } finally { setBusy(false) }
   }
   return (
     <div className="space-y-2">
@@ -405,8 +411,26 @@ function CompareTable({ cmp, request, notify, onChanged }: { cmp: Comparison; re
       {request.status === "sent" && scored.length > 0 && !cmp.ready_to_award && (
         <Field label="Reason for awarding with fewer quotes than the protocol asks for"><Input value={reason} onChange={(e) => setReason(e.target.value)} className="h-9 text-xs" maxLength={500} /></Field>
       )}
-      {request.status === "awarded" && <p className="text-xs text-emerald-400">Awarded{request.award_note ? `: ${request.award_note}` : ""}. Add the supplier as a source on the product, then raise a purchase order.</p>}
-      {result && <p className="text-xs text-foreground">{result.name} is now in your suppliers at {money(result.unit_price)} each. {result.next}</p>}
+      {request.status === "sent" && scored.length > 0 && (
+        <div className="space-y-1.5 rounded-md border border-border p-3 text-xs" aria-label="What awarding does">
+          <div className="font-medium text-foreground">When you award a supplier</div>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={addSource} onChange={(e) => setAddSource(e.target.checked)} /> Add them to the product as a supplier source at the quoted price and lead time</label>
+          <label className={`flex items-center gap-2 pl-6 ${addSource ? "" : "opacity-50"}`}><input type="checkbox" disabled={!addSource} checked={preferred} onChange={(e) => setPreferred(e.target.checked)} /> Make them the preferred supplier (only for a product that is not launched yet)</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={createPo} onChange={(e) => setCreatePo(e.target.checked)} /> Prepare a draft purchase order at the quoted price</label>
+          {createPo && warehouses.length > 1 && (
+            <div className="pl-6"><select className={`${selectCls} w-56`} value={warehouse} onChange={(e) => setWarehouse(e.target.value)} aria-label="Deliver to"><option value="">Deliver to…</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></div>
+          )}
+        </div>
+      )}
+      {request.status === "awarded" && <p className="text-xs text-emerald-400">Awarded{request.award_note ? `: ${request.award_note}` : ""}.</p>}
+      {result && (
+        <div className="space-y-1 rounded-md border border-emerald-500/40 p-3 text-xs" role="status">
+          <div className="text-foreground">{result.name} is now one of your suppliers, at {money(result.unit_price)} each.</div>
+          {result.source && <div className={result.source.status === "skipped" ? "text-amber-400" : "text-muted-foreground"}>Product: {result.source.status === "skipped" ? "not updated" : result.source.status === "unchanged" ? "already listed on these terms" : `supplier ${result.source.status}${result.source.preferred ? " as preferred" : ""}`}. {result.source.note}</div>}
+          {result.purchase_order && <div className={result.purchase_order.status === "skipped" ? "text-amber-400" : "text-muted-foreground"}>Purchase order: {result.purchase_order.status === "drafted" ? `${result.purchase_order.po_number} drafted for ${result.purchase_order.quantity}` : "not created"}. {result.purchase_order.note}</div>}
+          {result.flags.map((f) => <div key={f} className="text-amber-400">{f}</div>)}
+        </div>
+      )}
     </div>
   )
 }

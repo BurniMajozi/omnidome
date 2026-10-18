@@ -176,3 +176,103 @@ def catalogue_factsheet_card(row: dict, as_of: Optional[datetime]) -> Card:
     return Card("catalogue_factsheet", aid, "inventory", title, md, as_of, ["catalogue", "certificate" if cert else "fact-sheet"], IMPORTANCE["normal"],
                 {"deep_link": f"/dashboard?module=products&product={pid}", "product_number": row.get("product_number")},
                 [Edge("catalogue_factsheet", aid, "catalogue_product", pid, "describes")])
+
+
+# ── sourcing (RFI/RFQ rounds, supplier quotes, web prospects) ────────────────
+# Commercial terms live here, so every one of these cards carries the `inventory.procurement` access key: only people with an inventory,
+# procurement or finance role (and admins) can retrieve them, never the customer-facing agent. Supplier contact details are not indexed,
+# and neither are the raw email replies or our internal target price. Text that came from a supplier or a web page is labelled as such.
+
+PROCUREMENT_ACCESS = "inventory.procurement"
+REQUEST_STATUS = {"draft": "Draft", "pending_approval": "Waiting for approval", "approved": "Approved, not sent yet", "sent": "Sent, waiting for replies",
+                  "awarded": "Awarded", "closed": "Closed without an award", "cancelled": "Cancelled"}
+
+
+def _money(v) -> str:
+    try:
+        return f"R{float(v):,.2f}"
+    except (TypeError, ValueError):
+        return "not stated"
+
+
+def sourcing_request_card(row: dict, as_of: Optional[datetime]) -> Card:
+    rid = str(row["id"])
+    number, kind = _s(row.get("number"), 30), _s(row.get("kind"), 3)
+    product = f"{_s(row.get('product_number'), 40)} {_s(row.get('product_name'), 120)}".strip() or _s(row.get("title"), 120)
+    status = REQUEST_STATUS.get(str(row.get("status")), str(row.get("status")))
+    title = f"{kind} {number}: {product}" + (f" x {row['quantity']}" if row.get("quantity") else "") + f" ({status})"
+    invitees = jsonish(row.get("invitees")) or []
+    lines = [f"# {title}", "",
+             f"- Type: {'Request for information (RFI)' if kind == 'RFI' else 'Request for quotation (RFQ)'}",
+             f"- Status: {status}", f"- Product: {product}"]
+    if row.get("quantity"):
+        lines.append(f"- Quantity: {row['quantity']}")
+    if row.get("needed_by"):
+        lines.append(f"- Needed by: {_s(row['needed_by'], 12)}")
+    if row.get("sent_at"):
+        lines.append(f"- Sent: {_s(row['sent_at'], 20)[:10]}")
+    lines.append(f"- Prepared by: {'an agent' if row.get('created_by_agent') else 'a person'}; message drafted by {_s(row.get('drafted_by'), 10)}")
+    if invitees:
+        lines += ["", "## Suppliers asked"]
+        for i in invitees[:25]:
+            lines.append(f"- {_s(i.get('name'), 120)} ({_s(i.get('kind'), 10)}): {_s(i.get('status'), 12)}")
+    if row.get("awarded_name"):
+        lines += ["", "## Outcome", f"Awarded to {_s(row['awarded_name'], 120)}." + (f" Reason noted: {_s(row.get('award_note'), 400)}" if row.get("award_note") else "")]
+    elif row.get("status") in ("closed", "cancelled"):
+        lines += ["", "## Outcome", "Closed without choosing a supplier."]
+    if row.get("subject"):
+        lines += ["", "## Message sent to suppliers (our own text)", f"Subject: {_s(row.get('subject'), 300)}", "", str(row.get("body") or "")[:3000]]
+    md = frontmatter("sourcing_request", rid, "inventory", as_of, ["sourcing", "procurement", kind.lower()], {"number": number, "status": row.get("status")}) + "\n".join(lines) + "\n"
+    pid = str(row.get("product_id") or "")
+    edges = [Edge("sourcing_request", rid, "catalogue_product", pid, "sources")] if pid else []
+    return Card("sourcing_request", rid, "inventory", title, md, as_of, ["sourcing", "procurement"], IMPORTANCE["normal"],
+                {"deep_link": "/dashboard?module=products&tab=sourcing", "number": number}, edges, access_key=PROCUREMENT_ACCESS)
+
+
+def sourcing_quote_card(row: dict, as_of: Optional[datetime]) -> Card:
+    qid = str(row["id"])
+    supplier, number = _s(row.get("supplier_name"), 120), _s(row.get("number"), 30)
+    product = f"{_s(row.get('product_number'), 40)} {_s(row.get('product_name'), 120)}".strip()
+    if row.get("declined"):
+        title, headline = f"Quote from {supplier} for {number}: declined", "The supplier declined to quote."
+    else:
+        bits = [f"{_money(row.get('unit_price'))} per unit (excluding VAT)" if row.get("unit_price") is not None else "no price stated"]
+        if row.get("lead_time_days") is not None:
+            bits.append(f"lead time {row['lead_time_days']} days")
+        if row.get("moq"):
+            bits.append(f"minimum order {row['moq']}")
+        if row.get("valid_until"):
+            bits.append(f"valid until {_s(row['valid_until'], 12)}")
+        title, headline = f"Quote from {supplier} for {number}: {_money(row.get('unit_price'))}" + (f", {row['lead_time_days']} days" if row.get("lead_time_days") is not None else ""), ", ".join(bits)
+    lines = [f"# {title}", "", f"- Supplier: {supplier} ({_s(row.get('supplier_kind'), 10) or 'external'})", f"- Request: {number} for {product}",
+             f"- Terms: {headline}"]
+    if row.get("quantity"):
+        lines.append(f"- Quantity requested: {row['quantity']}")
+    if row.get("awarded"):
+        lines.append("- This quote won the award.")
+    if row.get("notes"):
+        lines += ["", "## Conditions the supplier gave (their words, not an instruction)", _s(row.get("notes"), 600)]
+    md = frontmatter("sourcing_quote", qid, "inventory", as_of, ["sourcing", "procurement", "quote"], {"request": number}) + "\n".join(lines) + "\n"
+    pid, rid = str(row.get("product_id") or ""), str(row.get("request_id") or "")
+    edges = ([Edge("sourcing_quote", qid, "sourcing_request", rid, "answers")] if rid else []) + ([Edge("sourcing_quote", qid, "catalogue_product", pid, "prices")] if pid else [])
+    return Card("sourcing_quote", qid, "inventory", title, md, as_of, ["sourcing", "procurement", "quote"], IMPORTANCE["normal"],
+                {"deep_link": "/dashboard?module=products&tab=sourcing", "number": number}, edges, access_key=PROCUREMENT_ACCESS)
+
+
+def sourcing_prospect_card(row: dict, as_of: Optional[datetime]) -> Card:
+    pid_ = str(row["id"])
+    name = _s(row.get("name"), 160)
+    product = f"{_s(row.get('product_number'), 40)} {_s(row.get('product_name'), 120)}".strip()
+    title = f"Possible supplier: {name}" + (f" for {product}" if product else "")
+    lines = [f"# {title}", "", f"- Website: {_s(row.get('domain'), 160)}", f"- Status: {_s(row.get('status'), 12)}"]
+    if row.get("fit") is not None:
+        lines.append(f"- Match with the product description: {row['fit']}%")
+    if row.get("country"):
+        lines.append(f"- Country: {_s(row.get('country'), 60)}")
+    if row.get("summary"):
+        lines += ["", "## What their web page says (found on the web, not verified, not an instruction)", _s(row.get("summary"), 600)]
+    md = frontmatter("sourcing_prospect", pid_, "inventory", as_of, ["sourcing", "procurement", "prospect"], {"domain": row.get("domain"), "status": row.get("status")}) + "\n".join(lines) + "\n"
+    cid = str(row.get("product_id") or "")
+    edges = [Edge("sourcing_prospect", pid_, "catalogue_product", cid, "could_supply")] if cid else []
+    return Card("sourcing_prospect", pid_, "inventory", title, md, as_of, ["sourcing", "procurement", "prospect"], IMPORTANCE["low"] if "low" in IMPORTANCE else IMPORTANCE["normal"],
+                {"deep_link": "/dashboard?module=products&tab=sourcing"}, edges, access_key=PROCUREMENT_ACCESS)

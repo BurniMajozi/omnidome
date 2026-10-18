@@ -22,9 +22,9 @@ from services.inventory import catalogue_rules as rules
 from services.inventory import sourcing as S
 from services.inventory.access import require_access, require_tier
 from services.inventory.catalogue_models import CatalogueProduct
-from services.inventory.database import (InventoryLevel, PurchaseOrder, PurchaseOrderItem, StockMovement, Supplier, get_session,
+from services.inventory.database import (InventoryLevel, PurchaseOrder, PurchaseOrderItem, StockMovement, Supplier, Warehouse, get_session,
                                          next_sequence_number)
-from services.inventory.routes.catalogue import _all, _catalogue_map, _get, _view
+from services.inventory.routes.catalogue import _all, _catalogue_map, _get, _log, _normalise_definition_sources, _view
 from services.inventory.routes.supplier_perf import load_facts, metrics_for
 from services.inventory.sourcing_models import (ProcurementProtocol, SourcingDiscovery, SourcingInvitee, SourcingRequest, SourcingResponse,
                                                 SupplierProfile, SupplierProspect)
@@ -700,15 +700,99 @@ async def compare_request(rid: uuid.UUID, tenant_id: uuid.UUID = Depends(get_cur
 class AwardIn(BaseModel):
     invitee_id: uuid.UUID
     reason: str = Field("", max_length=500)
+    add_source: bool = True                       # record the winner as a supplier source on the product
+    make_preferred: bool = False                  # and make them the preferred supplier (draft and in-review products only)
+    create_po: bool = True                        # prepare a draft purchase order at the quoted price
+    warehouse_id: Optional[uuid.UUID] = None      # where it is delivered (default: the only active warehouse)
+
+
+async def apply_award_source(db, tenant_id, user_id, r: SourcingRequest, supplier_id: uuid.UUID, quote: dict, make_preferred: bool) -> dict:
+    """Make the awarded supplier a source on the product at the quoted price and lead time.
+
+    An active product's commercial fields (which include the automatic purchase-cost line) change through a revision, so for a launched
+    product the supplier is added or updated without becoming preferred and without touching the preferred supplier's price."""
+    cat = await _get(db, tenant_id, r.product_id)
+    old = cat.definition or {}
+    if cat.status == "archived":
+        return {"status": "skipped", "note": "The product is archived."}
+    active = cat.status == "active"
+    sid = str(supplier_id)
+    note_text = f"From {r.number}" + (f" (valid until {quote['valid_until']})" if quote.get("valid_until") else "")
+
+    def build(prefer: bool, reprice_preferred: bool) -> tuple[dict, bool]:
+        d = {**old, "sources": [dict(s) for s in old.get("sources") or []]}
+        row = next((s for s in d["sources"] if str(s["supplier_id"]) == sid), None)
+        added = row is None
+        if added:
+            d["sources"].append({"supplier_id": sid, "supplier_sku": "", "unit_cost": quote["unit_price"], "cadence": "Once-off",
+                                 "lead_time_days": quote.get("lead_time_days"), "moq": quote.get("moq"), "preferred": False, "notes": note_text})
+        elif reprice_preferred or not row.get("preferred"):
+            row.update({"unit_cost": quote["unit_price"], "lead_time_days": quote.get("lead_time_days"), "moq": quote.get("moq"), "notes": note_text})
+        if prefer:
+            for s in d["sources"]:
+                s["preferred"] = str(s["supplier_id"]) == sid
+        return d, added
+
+    new_def, added = build(make_preferred and not active, reprice_preferred=not active)
+    try:
+        await _normalise_definition_sources(db, tenant_id, new_def)
+    except HTTPException as exc:
+        return {"status": "skipped", "note": str(exc.detail)}
+    if active and rules.commercial_changes(old, new_def):
+        new_def, added = build(False, reprice_preferred=False)
+        await _normalise_definition_sources(db, tenant_id, new_def)
+        if rules.commercial_changes(old, new_def):
+            return {"status": "skipped", "note": "A launched product's cost changes through a revision. Update the supplier price there."}
+    note = ""
+    if active and (make_preferred or any(str(s["supplier_id"]) == sid and s.get("preferred") for s in old.get("sources") or [])):
+        note = "The product is launched, so the preferred supplier and their price were left alone. Change them through a revision."
+    if new_def == old:
+        return {"status": "unchanged", "preferred": any(str(s["supplier_id"]) == sid and s.get("preferred") for s in new_def["sources"]),
+                "note": note or "The product already lists this supplier at these terms."}
+    cat.definition = new_def
+    cat.revision += 1
+    await db.flush()
+    await _log(db, tenant_id, cat.id, "source_from_rfq", user_id, {"request": r.number, "supplier_id": sid, "unit_cost": quote["unit_price"]})
+    preferred = any(str(s["supplier_id"]) == sid and s.get("preferred") for s in new_def["sources"])
+    return {"status": "added" if added else "updated", "preferred": preferred, "note": note}
+
+
+async def draft_award_po(db, tenant_id, user_id, r: SourcingRequest, supplier_id: uuid.UUID, quote: dict, warehouse_id: Optional[uuid.UUID]) -> dict:
+    """A draft purchase order at the quoted price. It goes through the normal approval journey; nothing is committed to the supplier."""
+    from services.inventory.routes.purchasing import POItemInput, PurchaseOrderCreate, create_purchase_order
+    cat = await _get(db, tenant_id, r.product_id)
+    if not cat.inventory_product_id:
+        return {"status": "skipped", "note": "The product has no stock item yet: launch it in Product Management first."}
+    wid = warehouse_id
+    if wid is None:
+        whs = (await db.execute(select(Warehouse.id).where(Warehouse.tenant_id == tenant_id, Warehouse.is_active.is_(True)))).scalars().all()
+        if len(whs) != 1:
+            return {"status": "skipped", "note": "Choose the warehouse to deliver to." if whs else "There is no warehouse to deliver to yet."}
+        wid = whs[0]
+    qty = max(int(r.quantity or 1), int(quote.get("moq") or 1))
+    try:
+        async with db.begin_nested():
+            po = await create_purchase_order(
+                body=PurchaseOrderCreate(supplier_id=supplier_id, warehouse_id=wid, notes=f"From {r.number}",
+                                         expected_delivery=(date.today() + timedelta(days=int(quote["lead_time_days"]))) if quote.get("lead_time_days") is not None else None,
+                                         items=[POItemInput(product_id=cat.inventory_product_id, quantity_ordered=qty, unit_cost_zar=Decimal(str(quote["unit_price"])))]),
+                tenant_id=tenant_id, user_id=user_id, db=db)
+    except HTTPException as exc:
+        return {"status": "skipped", "note": str(exc.detail)[:300]}
+    return {"status": "drafted", "id": str(po.id), "po_number": po.po_number, "quantity": qty,
+            "note": "Submit it to start the approval journey." + (f" Quantity raised to the supplier's minimum order of {qty}." if qty != (r.quantity or 1) else "")}
 
 
 @router.post("/requests/{rid}/award", dependencies=[Depends(require_tier("manager"))])
 async def award_request(rid: uuid.UUID, body: AwardIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
-    """Choose the winner. The protocol's minimum number of replies applies (a written reason can override it); a web prospect becomes a supplier."""
+    """Choose the winner. The protocol's minimum number of replies applies (a written reason can override); a web prospect becomes a supplier,
+    the winner is added to the product as a supplier source, and a draft purchase order is prepared at the quoted price."""
     r = await _load_request(db, tenant_id, rid, lock=True)
     if r.kind != "RFQ":
         raise HTTPException(409, "Only a request for quotation can be awarded")
-    if r.status not in ("sent", "awarded"):
+    if r.status == "awarded":
+        raise HTTPException(409, "This request has already been awarded")
+    if r.status != "sent":
         raise HTTPException(409, f"This request is {r.status}")
     c = await compare(db, tenant_id, r)
     row = next((x for x in c["rows"] if x["invitee_id"] == str(body.invitee_id)), None)
@@ -724,10 +808,16 @@ async def award_request(rid: uuid.UUID, body: AwardIn, tenant_id: uuid.UUID = De
         inv.supplier_id, supplier_id = s.id, s.id
     r.status, r.awarded_invitee_id, r.closed_at = "awarded", inv.id, datetime.now(timezone.utc)
     r.award_note = body.reason.strip()[:500]
+    quote = {"unit_price": row["unit_price"], "lead_time_days": row["lead_time_days"], "moq": row["moq"], "valid_until": row["valid_until"]}
+    source = po = None
+    if r.product_id and body.add_source:
+        async with db.begin_nested():
+            source = await apply_award_source(db, tenant_id, user_id, r, supplier_id, quote, body.make_preferred)
+    if r.product_id and body.create_po:
+        po = await draft_award_po(db, tenant_id, user_id, r, supplier_id, quote, body.warehouse_id)
     await _event(db, tenant_id, user_id, "request.awarded", {"request_id": str(r.id), "number": r.number, "supplier_id": str(supplier_id)})
     return {"status": "awarded", "supplier_id": str(supplier_id), "name": inv.name, "unit_price": row["unit_price"], "lead_time_days": row["lead_time_days"],
-            "quantity": r.quantity, "flags": row["flags"], "product_id": str(r.product_id) if r.product_id else None,
-            "next": "Add them as a supplier source on the product, then raise a purchase order."}
+            "quantity": r.quantity, "flags": row["flags"], "product_id": str(r.product_id) if r.product_id else None, "source": source, "purchase_order": po}
 
 
 @router.post("/requests/{rid}/close", dependencies=[Depends(require_tier("write"))])

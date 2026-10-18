@@ -288,6 +288,8 @@ END $$"""))
     s += _add_columns("inventory_suppliers", [("spend_limit", "NUMERIC(14,2)"), ("account_number", "VARCHAR(60)")])
     s += _add_columns("catalogue_products", [("inventory_product_id", "UUID")])
     s += _add_columns("catalogue_assets", [("purpose", "VARCHAR(20)"), ("text", "TEXT"), ("title", "VARCHAR(160)")])
+    s += _add_columns("sourcing_requests", [("updated_at", "TIMESTAMPTZ NOT NULL DEFAULT now()")])
+    s += _add_columns("sourcing_prospects", [("updated_at", "TIMESTAMPTZ NOT NULL DEFAULT now()")])
     return s
 
 

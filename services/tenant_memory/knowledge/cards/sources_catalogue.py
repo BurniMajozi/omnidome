@@ -89,3 +89,94 @@ async def ids_factsheets(session, tenant: str) -> dict:
 
 
 S.SOURCES["catalogue_factsheets"] = S.Source("catalogue_factsheets", "inventory", ("catalogue_factsheet",), fetch_factsheets, ids_factsheets)
+
+
+# ── sourcing: requests, quotes, prospects (inventory tables; commercial terms, so cards are procurement-restricted) ──
+
+_SOURCING_TABLES = ("sourcing_requests", "sourcing_responses", "sourcing_prospects", "sourcing_invitees")
+
+
+async def _sourcing_ready(session, *tables: str) -> bool:
+    from services.tenant_memory.knowledge.cards.sources_ext import table_exists
+    for t in tables:
+        if not await table_exists(session, t):
+            return False
+    return True
+
+
+async def fetch_sourcing_requests(session, tenant: str, wm: Optional[dict], limit: int) -> S.Page:
+    if not await _sourcing_ready(session, "sourcing_requests", "sourcing_invitees", "sourcing_responses"):
+        return S.Page()
+    ts = ("GREATEST(r.updated_at, COALESCE((SELECT max(x.created_at) FROM sourcing_responses x WHERE x.request_id = r.id), r.updated_at), "
+          "COALESCE((SELECT max(i.sent_at) FROM sourcing_invitees i WHERE i.request_id = r.id), r.updated_at))")
+    ks, kp = S._keyset(ts, "r.id::text", wm)
+    rows = await S._rows(session, f"""SELECT r.number, r.kind, r.status, r.title, r.quantity, r.needed_by::text AS needed_by, r.subject, r.body, r.drafted_by, r.sent_at::text AS sent_at,
+            r.award_note, r.created_by_agent, r.product_id::text AS product_id, p.product_number, p.name AS product_name,
+            (SELECT i.name FROM sourcing_invitees i WHERE i.id = r.awarded_invitee_id) AS awarded_name,
+            (SELECT jsonb_agg(jsonb_build_object('name', i.name, 'kind', i.kind, 'status', i.status) ORDER BY i.created_at) FROM sourcing_invitees i WHERE i.request_id = r.id) AS invitees,
+            {ts} AS ts, r.id::text AS id
+        FROM sourcing_requests r LEFT JOIN catalogue_products p ON p.id = r.product_id AND p.tenant_id = r.tenant_id
+        WHERE r.tenant_id = CAST(:tenant_id AS uuid){ks} ORDER BY {ts}, r.id::text LIMIT :limit""", {"tenant_id": tenant, "limit": limit, **kp})
+    page = S.Page()
+    S._track(page, rows)
+    page.cards = [BC.sourcing_request_card(r, S._utc(r["ts"])) for r in rows]
+    return page
+
+
+async def ids_sourcing_requests(session, tenant: str) -> dict:
+    from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable
+    if not await _sourcing_ready(session, "sourcing_requests"):
+        raise SourceUnavailable("table sourcing_requests does not exist; refusing to reconcile sourcing_requests")
+    rows = await S._rows(session, "SELECT id::text AS id FROM sourcing_requests WHERE tenant_id = CAST(:t AS uuid)", {"t": tenant})
+    return {"sourcing_request": {r["id"] for r in rows}}
+
+
+async def fetch_sourcing_quotes(session, tenant: str, wm: Optional[dict], limit: int) -> S.Page:
+    if not await _sourcing_ready(session, "sourcing_requests", "sourcing_invitees", "sourcing_responses"):
+        return S.Page()
+    ks, kp = S._keyset("x.created_at", "x.id::text", wm)
+    rows = await S._rows(session, f"""SELECT x.unit_price, x.lead_time_days, x.moq, x.valid_until::text AS valid_until, x.notes, x.declined, x.request_id::text AS request_id,
+            r.number, r.quantity, r.product_id::text AS product_id, p.product_number, p.name AS product_name, i.name AS supplier_name, i.kind AS supplier_kind,
+            (r.awarded_invitee_id = i.id) AS awarded, x.created_at AS ts, x.id::text AS id
+        FROM sourcing_responses x JOIN sourcing_requests r ON r.id = x.request_id AND r.tenant_id = x.tenant_id
+        JOIN sourcing_invitees i ON i.id = x.invitee_id LEFT JOIN catalogue_products p ON p.id = r.product_id AND p.tenant_id = r.tenant_id
+        WHERE x.tenant_id = CAST(:tenant_id AS uuid){ks} ORDER BY x.created_at, x.id::text LIMIT :limit""", {"tenant_id": tenant, "limit": limit, **kp})
+    page = S.Page()
+    S._track(page, rows)
+    page.cards = [BC.sourcing_quote_card(r, S._utc(r["ts"])) for r in rows]
+    return page
+
+
+async def ids_sourcing_quotes(session, tenant: str) -> dict:
+    from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable
+    if not await _sourcing_ready(session, "sourcing_responses"):
+        raise SourceUnavailable("table sourcing_responses does not exist; refusing to reconcile sourcing_quotes")
+    rows = await S._rows(session, "SELECT id::text AS id FROM sourcing_responses WHERE tenant_id = CAST(:t AS uuid)", {"t": tenant})
+    return {"sourcing_quote": {r["id"] for r in rows}}
+
+
+async def fetch_sourcing_prospects(session, tenant: str, wm: Optional[dict], limit: int) -> S.Page:
+    if not await _sourcing_ready(session, "sourcing_prospects"):
+        return S.Page()
+    ks, kp = S._keyset("s.updated_at", "s.id::text", wm)
+    rows = await S._rows(session, f"""SELECT s.name, s.domain, s.summary, s.fit, s.status, s.country, s.product_id::text AS product_id, p.product_number, p.name AS product_name,
+            s.updated_at AS ts, s.id::text AS id
+        FROM sourcing_prospects s LEFT JOIN catalogue_products p ON p.id = s.product_id AND p.tenant_id = s.tenant_id
+        WHERE s.tenant_id = CAST(:tenant_id AS uuid) AND s.status <> 'dismissed'{ks} ORDER BY s.updated_at, s.id::text LIMIT :limit""", {"tenant_id": tenant, "limit": limit, **kp})
+    page = S.Page()
+    S._track(page, rows)
+    page.cards = [BC.sourcing_prospect_card(r, S._utc(r["ts"])) for r in rows]
+    return page
+
+
+async def ids_sourcing_prospects(session, tenant: str) -> dict:
+    from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable
+    if not await _sourcing_ready(session, "sourcing_prospects"):
+        raise SourceUnavailable("table sourcing_prospects does not exist; refusing to reconcile sourcing_prospects")
+    rows = await S._rows(session, "SELECT id::text AS id FROM sourcing_prospects WHERE tenant_id = CAST(:t AS uuid) AND status <> 'dismissed'", {"t": tenant})
+    return {"sourcing_prospect": {r["id"] for r in rows}}
+
+
+S.SOURCES["sourcing_requests"] = S.Source("sourcing_requests", "inventory", ("sourcing_request",), fetch_sourcing_requests, ids_sourcing_requests)
+S.SOURCES["sourcing_quotes"] = S.Source("sourcing_quotes", "inventory", ("sourcing_quote",), fetch_sourcing_quotes, ids_sourcing_quotes)
+S.SOURCES["sourcing_prospects"] = S.Source("sourcing_prospects", "inventory", ("sourcing_prospect",), fetch_sourcing_prospects, ids_sourcing_prospects)

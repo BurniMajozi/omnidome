@@ -78,7 +78,13 @@ export const recordResponse = (id: string, b: { invitee_id: string; unit_price?:
   inventoryCall<QuoteResponse>(`/sourcing/requests/${id}/responses`, j(b))
 export const parseReply = (id: string, text: string) => inventoryCall<ParsedReply>(`/sourcing/requests/${id}/parse-reply`, j({ text }))
 export const compareRequest = (id: string) => inventoryCall<Comparison>(`/sourcing/requests/${id}/compare`)
-export const awardRequest = (id: string, invitee_id: string, reason = "") =>
-  inventoryCall<{ supplier_id: string; name: string; unit_price: number; lead_time_days: number | null; quantity: number | null; flags: string[]; next: string }>(`/sourcing/requests/${id}/award`, j({ invitee_id, reason }))
+export interface AwardOptions { reason?: string; add_source?: boolean; make_preferred?: boolean; create_po?: boolean; warehouse_id?: string | null }
+export interface AwardResult {
+  supplier_id: string; name: string; unit_price: number; lead_time_days: number | null; quantity: number | null; flags: string[]; product_id: string | null
+  source: { status: "added" | "updated" | "unchanged" | "skipped"; preferred?: boolean; note: string } | null
+  purchase_order: { status: "drafted" | "skipped"; id?: string; po_number?: string; quantity?: number; note: string } | null
+}
+export const awardRequest = (id: string, invitee_id: string, o: AwardOptions = {}) =>
+  inventoryCall<AwardResult>(`/sourcing/requests/${id}/award`, j({ invitee_id, reason: "", ...o }))
 export const getReorder = () => inventoryCall<{ items: ReorderItem[]; cover_days: number; lookback_days: number; note: string }>("/sourcing/reorder-suggestions")
 export const runScan = () => inventoryCall<{ created: { request_id: string; number: string; product: string; quantity: number; invited: number }[]; skipped: { product: string; why: string }[]; note: string }>("/sourcing/automation/run", { method: "POST" })

@@ -997,11 +997,11 @@ class ToolRegistry:
         ))
         self.register(Tool(
             name='sourcing_award_request',
-            description="Award an RFQ to one supplier after the protocol's minimum number of quotes (a written reason can override). A person approves this before it runs. A web prospect becomes a supplier.",
+            description="Award an RFQ to one supplier after the protocol's minimum number of quotes (a written reason can override). A person approves this before it runs. A web prospect becomes a supplier. Unless told otherwise it also adds the winner to the product as a supplier source at the quoted price and prepares a DRAFT purchase order (which still goes through the purchase-order approval journey).",
             service="inventory",
             method='POST',
             endpoint='/sourcing/requests/{request_id}/award',
-            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}, "invitee_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["request_id", "invitee_id"]}'),
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}, "invitee_id": {"type": "string"}, "reason": {"type": "string"}, "add_source": {"type": "boolean", "description": "Add the winner as a supplier source on the product (default true)"}, "make_preferred": {"type": "boolean", "description": "Make them preferred; only works for products not launched yet"}, "create_po": {"type": "boolean", "description": "Prepare a draft purchase order (default true)"}, "warehouse_id": {"type": "string", "description": "Where the order is delivered; optional when there is one warehouse"}}, "required": ["request_id", "invitee_id"]}'),
         ))
         self.register(Tool(
             name='inventory_create_purchase_order',

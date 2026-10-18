@@ -69,6 +69,7 @@ class SupplierProspect(Base):
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="new")         # new | invited | converted | dismissed
     supplier_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)             # set once converted into the supplier master
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class SourcingRequest(Base):
@@ -100,6 +101,7 @@ class SourcingRequest(Base):
     award_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")       # manual | reorder_scan | agent
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class SourcingInvitee(Base):
