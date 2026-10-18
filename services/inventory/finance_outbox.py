@@ -15,6 +15,9 @@ from services.inventory.database import InventoryFinanceOutbox, _get_session_fac
 from services.inventory.purchasing_helpers import journal_payload
 
 
+PERMANENT_AFTER = 5
+
+
 async def post_entry(tenant_id, user_id, payload):
     key = os.getenv("INTERNAL_SERVICE_KEY", "")
     if not key:
@@ -92,9 +95,13 @@ async def deliver(tenant_id, user_id=None, *, force=False, limit=100, session_fa
             try:
                 await post_entry(row.tenant_id, user_id, row.payload)
             except Exception as exc:
-                row.status = "failed"
+                code = getattr(getattr(exc, "response", None), "status_code", None)
+                # A client error that is not a timeout/rate limit (module not enabled, tenant gone, bad payload) will not fix itself:
+                # after a few tries park the row as "rejected" for a human instead of retrying it for ever.
+                permanent = code is not None and 400 <= code < 500 and code not in (408, 429) and row.attempts >= PERMANENT_AFTER
+                row.status = "rejected" if permanent else "failed"
                 row.last_error = str(exc)[:1000]
-                row.next_attempt_at = now + timedelta(seconds=min(3600, 30 * 2 ** min(row.attempts, 7)))
+                row.next_attempt_at = None if permanent else now + timedelta(seconds=min(3600, 30 * 2 ** min(row.attempts, 7)))
                 failed += 1
             else:
                 row.status = "sent"

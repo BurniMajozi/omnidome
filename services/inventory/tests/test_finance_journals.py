@@ -43,3 +43,37 @@ def test_zero_value_queues_nothing_and_value_queues_one_pending_row():
     assert finance_outbox.enqueue_payload(db, "t", writeoff_journal("w0", Decimal("0"), DAY), Decimal("0")) is False and db.rows == []
     assert finance_outbox.enqueue_payload(db, "t", writeoff_journal("w2", Decimal("5"), DAY), Decimal("5")) is True
     assert db.rows[0].status == "pending" and db.rows[0].source == "INVENTORY_WRITEOFF" and db.rows[0].source_id == "w2"
+
+
+def test_permanent_client_errors_are_parked_not_retried_forever(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import httpx
+    from services.inventory import finance_outbox as fo
+
+    def row(attempts):
+        return SimpleNamespace(tenant_id="t", payload={}, attempts=attempts, status="pending", last_error=None, next_attempt_at=None)
+
+    class Db:
+        def __init__(self, rows): self.rows = rows
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def execute(self, _): return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: self.rows))
+        async def commit(self): pass
+
+    def err(code):
+        return httpx.HTTPStatusError("x", request=httpx.Request("POST", "http://f"), response=httpx.Response(code))
+
+    async def run(code, attempts):
+        r = row(attempts)
+        async def boom(*a, **k): raise err(code)
+        monkeypatch.setattr(fo, "post_entry", boom)
+        await fo.deliver("t", None, force=True, session_factory=lambda: Db([r]))
+        return r
+
+    early = asyncio.run(run(403, 0))
+    assert early.status == "failed" and early.next_attempt_at is not None          # a first 403 is retried (entitlement may be mid-change)
+    parked = asyncio.run(run(403, fo.PERMANENT_AFTER))
+    assert parked.status == "rejected" and parked.next_attempt_at is None
+    assert asyncio.run(run(503, fo.PERMANENT_AFTER + 3)).status == "failed"        # server errors always retry
+    assert asyncio.run(run(429, fo.PERMANENT_AFTER + 3)).status == "failed"
