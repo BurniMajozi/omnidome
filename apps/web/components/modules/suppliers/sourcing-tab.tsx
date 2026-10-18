@@ -12,6 +12,7 @@ import {
   listRequests, parseReply, patchProspect, recordResponse, requestAction, runScan, sendRequest, startDiscovery,
   type Candidates, type Comparison, type Invitee, type ParsedReply, type Prospect, type ReorderItem, type RequestDetail, type RequestStatus, type SourcingRequest,
 } from "@/lib/sourcing-api"
+import { UsageIndicator } from "@/components/modules/analytics/shared"
 import { Field, areaCls, money, selectCls } from "../products/catalogue/shared"
 
 type Section = "reorder" | "find" | "requests"
@@ -73,7 +74,9 @@ function ReorderView({ notify, onRequest, onOpen }: { notify: (t: string, e?: bo
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Prepare draft RFQs for all
         </Button>
       </div>
-      {data && data.items.length === 0 && <p className="text-xs text-muted-foreground">No launched stock product needs buying right now.</p>}
+      {data && data.items.length === 0 && (
+        <p className="text-xs text-muted-foreground">Nothing to reorder from your KPIs yet. This list fills in when a launched stock product has customer dispatches in the last {data.lookback_days} days and its stock cover falls below {data.cover_days} days. You can still ask suppliers about any product under “RFI / RFQ”.</p>
+      )}
       {data && data.items.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -105,9 +108,14 @@ function FindView({ products, notify, onInvite }: { products: Product[]; notify:
   const [note, setNote] = useState("")
   const [running, setRunning] = useState(false)
   const [prospects, setProspects] = useState<Prospect[]>([])
+  const [meterKey, setMeterKey] = useState(0)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
-  const load = useCallback((pid: string) => (pid ? listProspects(pid).then(setProspects).catch(() => setProspects([])) : Promise.resolve(setProspects([]))), [])
+  const load = useCallback((pid: string) => {
+    setLoadError(null)
+    return pid ? listProspects(pid).then(setProspects).catch((e) => { setProspects([]); setLoadError(errText(e, "Could not load prospects")) }) : Promise.resolve(setProspects([]))
+  }, [])
   useEffect(() => { void load(productId) }, [productId, load])
 
   async function search() {
@@ -125,7 +133,7 @@ function FindView({ products, notify, onInvite }: { products: Product[]; notify:
       if (cur.status === "running") throw new Error("The search is still running. Check back in a minute.")
       notify(cur.prospects ? `Found ${cur.prospects} possible supplier${cur.prospects === 1 ? "" : "s"}. Check each one before contacting them.` : "The search found no new suppliers.")
       await load(productId)
-    } catch (e) { notify(errText(e, "Search failed"), true) } finally { if (alive.current) setRunning(false) }
+    } catch (e) { notify(errText(e, "Search failed"), true) } finally { if (alive.current) { setRunning(false); setMeterKey((k) => k + 1) } }
   }
   async function act(fn: () => Promise<unknown>, ok: string) {
     try { await fn(); notify(ok); await load(productId) } catch (e) { notify(errText(e, "That did not work"), true) }
@@ -138,7 +146,10 @@ function FindView({ products, notify, onInvite }: { products: Product[]; notify:
         <Field label="Anything specific? (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. must hold ICASA approval" className="h-9 w-64 text-xs" maxLength={300} /></Field>
         <Button type="button" size="sm" className="h-9 gap-1.5 text-xs" disabled={running || !productId} onClick={() => void search()}>{running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />} {running ? "Searching…" : "Search the web"}</Button>
       </div>
-      {productId && prospects.length === 0 && !running && <p className="text-xs text-muted-foreground">No prospects for this product yet.</p>}
+      <UsageIndicator refreshKey={meterKey} />
+      {running && <p className="text-xs text-muted-foreground" role="status">Searching the web and reading the top pages. This usually takes under a minute and uses research credits.</p>}
+      {loadError && <p className="text-xs text-red-400" role="alert">{loadError} <Button type="button" variant="outline" size="sm" className="ml-2 h-6 text-[11px]" onClick={() => void load(productId)}>Retry</Button></p>}
+      {productId && !loadError && prospects.length === 0 && !running && <p className="text-xs text-muted-foreground">No prospects for this product yet. Press “Search the web”.</p>}
       {prospects.map((p) => (
         <div key={p.id} className={`rounded-lg border p-3 text-xs ${p.status === "dismissed" ? "border-border opacity-60" : "border-border bg-card/60"}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -201,9 +212,10 @@ function NewRequest({ products, preset, notify, onCancel, onCreated }: {
   const [needed, setNeeded] = useState("")
   const [target, setTarget] = useState("")
   const [cand, setCand] = useState<Candidates | null>(null)
+  const [candError, setCandError] = useState<string | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set(preset.prospect_id ? [`p:${preset.prospect_id}`] : []))
   const [busy, setBusy] = useState(false)
-  useEffect(() => { setCand(null); if (productId) getCandidates(productId).then((c) => { setCand(c); if (!preset.prospect_id) setPicked(new Set(c.suppliers.filter((s) => s.current_source && s.eligible).slice(0, c.protocol.max_suppliers).map((s) => `s:${s.supplier_id}`))) }).catch((e) => notify(errText(e, "Could not load suppliers"), true)) }, [productId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setCand(null); setCandError(null); if (productId) getCandidates(productId).then((c) => { setCand(c); if (!preset.prospect_id) setPicked(new Set(c.suppliers.filter((s) => s.current_source && s.eligible).slice(0, c.protocol.max_suppliers).map((s) => `s:${s.supplier_id}`))) }).catch((e) => setCandError(errText(e, "Could not load suppliers"))) }, [productId]) // eslint-disable-line react-hooks/exhaustive-deps
   const max = cand?.protocol.max_suppliers ?? 5
   const toggle = (key: string) => setPicked((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else if (n.size < max) n.add(key); else notify(`The protocol allows at most ${max} suppliers per request.`, true); return n })
 
@@ -232,7 +244,8 @@ function NewRequest({ products, preset, notify, onCancel, onCreated }: {
       </div>
       <div className="space-y-2">
         <div className="text-xs font-medium text-foreground">Who to ask ({picked.size}/{max})</div>
-        {!cand && productId && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {!cand && productId && !candError && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {candError && <p className="text-xs text-red-400" role="alert">{candError}</p>}
         {cand?.suppliers.map((s) => (
           <label key={s.supplier_id} className={`flex items-center gap-2 rounded-md border p-2 text-xs ${s.eligible ? "border-border" : "border-border opacity-50"}`}>
             <input type="checkbox" disabled={!s.eligible} checked={picked.has(`s:${s.supplier_id}`)} onChange={() => toggle(`s:${s.supplier_id}`)} />
@@ -311,8 +324,8 @@ function RequestDetailView({ id, notify, onBack }: { id: string; notify: (t: str
         {r.status === "draft" && <Button type="button" size="sm" disabled={busy || dirty} onClick={() => void run(() => requestAction(id, "submit"), "Submitted.")}>Submit for approval</Button>}
         {r.status === "pending_approval" && <><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void run(() => requestAction(id, "reject"), "Sent back to draft.")}>Send back</Button>
           <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void run(() => requestAction(id, "approve"), "Approved.")}><Check className="mr-1 h-3.5 w-3.5" /> Approve</Button>
-          <Button type="button" size="sm" className="gap-1.5" disabled={busy} onClick={() => void run(async () => { const s = await sendRequest(id); notify(`Approved and sent to ${s.sent}${s.failed ? `; ${s.failed} could not be sent` : ""}.`) }, "")}><Send className="h-3.5 w-3.5" /> Approve and send</Button></>}
-        {r.status === "approved" && <Button type="button" size="sm" className="gap-1.5" disabled={busy} onClick={() => void run(async () => { const s = await sendRequest(id); notify(`Sent to ${s.sent}${s.failed ? `; ${s.failed} could not be sent` : ""}.`) }, "")}><Send className="h-3.5 w-3.5" /> Send now</Button>}
+          <Button type="button" size="sm" className="gap-1.5" disabled={busy} onClick={() => void run(async () => { const s = await sendRequest(id); notify(s.sent ? `Approved and sent to ${s.sent}${s.failed ? `; ${s.failed} could not be sent` : ""}.` : `Approved, but nothing was sent: ${s.error ?? "see the errors below"}`, !s.sent) }, "")}><Send className="h-3.5 w-3.5" /> Approve and send</Button></>}
+        {r.status === "approved" && <Button type="button" size="sm" className="gap-1.5" disabled={busy} onClick={() => void run(async () => { const s = await sendRequest(id); notify(s.sent ? `Sent to ${s.sent}${s.failed ? `; ${s.failed} could not be sent` : ""}.` : `Nothing was sent: ${s.error ?? "see the errors below"}`, !s.sent) }, "")}><Send className="h-3.5 w-3.5" /> Send now</Button>}
         {r.status === "sent" && r.invitees.some((i) => i.status === "failed" || i.status === "invited") && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => { const s = await sendRequest(id); notify(`Sent to ${s.sent}${s.failed ? `; ${s.failed} still failing` : ""}.`) }, "")}>Send to the rest</Button>}
         {(r.status === "draft" || r.status === "pending_approval" || r.status === "approved" || r.status === "sent") && <Button type="button" size="sm" variant="ghost" className="hover:text-red-400" disabled={busy} onClick={() => void run(() => requestAction(id, "close"), "Closed.")}>Close request</Button>}
       </div>

@@ -42,6 +42,16 @@ OPEN_STATUSES = ("draft", "pending_approval", "approved", "sent")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+def _ident(auth: AuthContext) -> dict:
+    """Roles and permissions of the person asking, for calls to other services (they are signed with the rest of the identity)."""
+    headers = {}
+    if auth.roles:
+        headers["x-roles"] = ",".join(auth.roles)
+    if auth.permissions:
+        headers["x-permissions"] = ",".join(auth.permissions)
+    return headers
+
+
 async def _protocol(db, tenant_id) -> S.Protocol:
     row = (await db.execute(select(ProcurementProtocol).where(ProcurementProtocol.tenant_id == tenant_id))).scalar_one_or_none()
     return S.protocol_from(row.config if row else None)
@@ -180,15 +190,16 @@ def _prospect(p: SupplierProspect) -> dict:
 
 @router.post("/discoveries", status_code=201, dependencies=[Depends(require_tier("write"))])
 async def start_discovery(body: DiscoverIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id),
-                          db=Depends(get_session)):
+                          auth: AuthContext = Depends(get_auth_context), db=Depends(get_session)):
     """Search the web for suppliers of this product, using its description and specifications. Uses (metered) research credits."""
     protocol = await _protocol(db, tenant_id)
     if not protocol.allow_external:
         raise HTTPException(409, "The procurement protocol does not allow external suppliers")
     view = _view(await _get(db, tenant_id, body.product_id))
     question = S.discovery_question(view, body.country, body.note)
+    await db.commit()                    # give the connection back: the research call below can take a while
     try:
-        run = await _request_research(tenant_id, user_id, question, body.country)
+        run = await _request_research(tenant_id, user_id, question, body.country, _ident(auth))
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -200,10 +211,10 @@ async def start_discovery(body: DiscoverIn, tenant_id: uuid.UUID = Depends(get_c
     return {"id": str(d.id), "status": d.status, "query": question}
 
 
-async def _request_research(tenant_id, user_id, question: str, country: str) -> dict:
+async def _request_research(tenant_id, user_id, question: str, country: str, ident: dict) -> dict:
     import httpx
     try:
-        return await _request("POST", "fno_intelligence", "/api/fno/analytics/research", tenant_id=tenant_id, user_id=user_id,
+        return await _request("POST", "fno_intelligence", "/api/fno/analytics/research", tenant_id=tenant_id, user_id=user_id, extra_headers=ident,
                               json={"question": question, "depth": "quick", "country": (country or "za")[:2].lower()}, timeout=20.0, retries=1)
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
@@ -217,22 +228,27 @@ async def _request_research(tenant_id, user_id, question: str, country: str) -> 
 
 @router.get("/discoveries/{discovery_id}", dependencies=[Depends(require_tier("write"))])
 async def get_discovery(discovery_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id),
-                        db=Depends(get_session)):
+                        auth: AuthContext = Depends(get_auth_context), db=Depends(get_session)):
     """Progress of a search. When the research finishes, the suppliers it found become prospects for you to review."""
-    d = (await db.execute(select(SourcingDiscovery).where(SourcingDiscovery.id == discovery_id, SourcingDiscovery.tenant_id == tenant_id).with_for_update())).scalar_one_or_none()
+    d = (await db.execute(select(SourcingDiscovery).where(SourcingDiscovery.id == discovery_id, SourcingDiscovery.tenant_id == tenant_id))).scalar_one_or_none()
     if d is None:
         raise HTTPException(404, "Search not found")
     if d.status == "running" and d.run_id:
+        run_id = d.run_id
+        await db.commit()                # no connection held while the research service answers
         try:
-            run = await _request("GET", "fno_intelligence", f"/api/fno/analytics/research/{d.run_id}", tenant_id=tenant_id, user_id=user_id, timeout=15.0, retries=1)
+            run = await _request("GET", "fno_intelligence", f"/api/fno/analytics/research/{run_id}", tenant_id=tenant_id, user_id=user_id, extra_headers=_ident(auth),
+                                 timeout=15.0, retries=1)
         except Exception as exc:  # noqa: BLE001
-            return {"id": str(d.id), "status": d.status, "prospects": d.prospects, "note": f"Waiting for the research service ({type(exc).__name__})"}
-        if run.get("status") == "failed":
-            d.status, d.error = "failed", str(run.get("error") or "The research failed")[:500]
-        elif run.get("status") == "done":
-            view = _view(await _get(db, tenant_id, d.product_id)) if d.product_id else {}
-            d.prospects = await _store_prospects(db, tenant_id, d, run, view)
-            d.status, d.summary = "done", str((run.get("report") or {}).get("summary") or "")[:2000]
+            return {"id": str(discovery_id), "status": "running", "prospects": 0, "note": f"Waiting for the research service ({type(exc).__name__})"}
+        d = (await db.execute(select(SourcingDiscovery).where(SourcingDiscovery.id == discovery_id, SourcingDiscovery.tenant_id == tenant_id).with_for_update())).scalar_one()
+        if d.status == "running":
+            if run.get("status") == "failed":
+                d.status, d.error = "failed", str(run.get("error") or "The research failed")[:500]
+            elif run.get("status") == "done":
+                view = _view(await _get(db, tenant_id, d.product_id)) if d.product_id else {}
+                d.prospects = await _store_prospects(db, tenant_id, d, run, view)
+                d.status, d.summary = "done", str((run.get("report") or {}).get("summary") or "")[:2000]
     prospects = (await db.execute(select(SupplierProspect).where(SupplierProspect.discovery_id == d.id).order_by(SupplierProspect.fit.desc().nullslast()))).scalars().all()
     return {"id": str(d.id), "status": d.status, "error": d.error, "summary": d.summary, "prospects": d.prospects, "items": [_prospect(p) for p in prospects]}
 
@@ -525,11 +541,11 @@ async def reject_request(rid: uuid.UUID, tenant_id: uuid.UUID = Depends(get_curr
     return _req(r)
 
 
-async def _mailbox(tenant_id, user_id, protocol: S.Protocol) -> str:
+async def _mailbox(tenant_id, user_id, protocol: S.Protocol, ident: dict) -> str:
     if protocol.mailbox_id:
         return protocol.mailbox_id
     try:
-        boxes = await _request("GET", "communication", "/api/v1/mail/mailboxes", tenant_id=tenant_id, user_id=user_id, timeout=15.0, retries=1)
+        boxes = await _request("GET", "communication", "/api/v1/mail/mailboxes", tenant_id=tenant_id, user_id=user_id, extra_headers=ident, timeout=15.0, retries=1)
     except Exception as exc:  # noqa: BLE001
         code = getattr(getattr(exc, "response", None), "status_code", None)
         raise HTTPException(409 if code in (401, 403) else 502,
@@ -565,35 +581,54 @@ async def send_request(rid: uuid.UUID, tenant_id: uuid.UUID = Depends(get_curren
     if not invitees:
         raise HTTPException(409, "Everyone has already been sent this request")
     external = [i for i in invitees if i.kind == "external"]
-    mailbox = None
+    ident = _ident(auth)
+    sent = failed = 0
+    for i in [x for x in invitees if x.kind == "internal"]:
+        await _notify(db, tenant_id, f"{r.number}: {r.subject}", f"Internal request to {i.name}: {r.body[:400]}")
+        i.status, i.sent_at, i.error = "sent", datetime.now(timezone.utc), None
+        sent += 1
+    mailbox, to_send = None, []
     if external:
         if not protocol.allow_external:
             raise HTTPException(409, "The procurement protocol does not allow external suppliers")
-        mailbox = await _mailbox(tenant_id, user_id, protocol)
-    sent = failed = 0
-    for i in invitees:
-        now = datetime.now(timezone.utc)
-        if i.kind == "internal":
-            await _notify(db, tenant_id, f"{r.number}: {r.subject}", f"Internal request to {i.name}: {r.body[:400]}")
-            i.status, i.sent_at, i.error = "sent", now, None
-            sent += 1
-            continue
-        if not i.email:
-            i.status, i.error = "failed", "No email address on file for this supplier"
-            failed += 1
-            continue
+        for i in external:
+            if i.email:
+                to_send.append((i.id, i.email))
+                i.status = "sending"             # claimed, so a second click or an agent cannot send it twice
+            else:
+                i.status, i.error = "failed", "No email address on file for this supplier"
+                failed += 1
+    subject, text_, number, rid_, protocol_box = r.subject, r.body, r.number, r.id, protocol
+    if to_send:
+        await db.commit()                        # release the connection while mail goes out; the claims above are saved
+        results: dict = {}
         try:
-            await _request("POST", "communication", "/api/v1/mail/send", tenant_id=tenant_id, user_id=user_id, timeout=30.0, retries=0,
-                           json={"mailbox_id": mailbox, "to": [i.email], "subject": r.subject, "body_text": r.body})
-            i.status, i.sent_at, i.error = "sent", now, None
-            sent += 1
-        except Exception as exc:  # noqa: BLE001 - one bad address must not stop the others
-            i.status, i.error = "failed", (str(getattr(getattr(exc, "response", None), "text", "") or exc))[:300]
-            failed += 1
+            mailbox = await _mailbox(tenant_id, user_id, protocol_box, ident)
+        except HTTPException as exc:
+            results = {iid: str(exc.detail)[:300] for iid, _ in to_send}
+        if mailbox:
+            for iid, email in to_send:
+                try:
+                    await _request("POST", "communication", "/api/v1/mail/send", tenant_id=tenant_id, user_id=user_id, extra_headers=ident, timeout=30.0, retries=0,
+                                   json={"mailbox_id": mailbox, "to": [email], "subject": subject, "body_text": text_})
+                    results[iid] = None
+                except Exception as exc:  # noqa: BLE001 - one bad address must not stop the others
+                    results[iid] = (str(getattr(getattr(exc, "response", None), "text", "") or exc))[:300]
+        r = await _load_request(db, tenant_id, rid_, lock=True)
+        for i in await _invitees(db, rid_):
+            if i.id in results:
+                if results[i.id] is None:
+                    i.status, i.sent_at, i.error = "sent", datetime.now(timezone.utc), None
+                    sent += 1
+                else:
+                    i.status, i.error = "failed", results[i.id]
+                    failed += 1
     if sent:
         r.status, r.sent_at = "sent", r.sent_at or datetime.now(timezone.utc)
     await _event(db, tenant_id, user_id, "request.sent", {"request_id": str(r.id), "number": r.number, "sent": sent, "failed": failed})
-    return {"sent": sent, "failed": failed, "status": r.status, "invitees": [_inv(i) for i in await _invitees(db, rid)]}
+    errors = sorted({i.error for i in await _invitees(db, rid_) if i.status == "failed" and i.error})
+    return {"sent": sent, "failed": failed, "status": r.status, "error": errors[0] if errors and not sent else None,
+            "invitees": [_inv(i) for i in await _invitees(db, rid_)]}
 
 
 class ResponseIn(BaseModel):

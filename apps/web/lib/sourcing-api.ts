@@ -73,7 +73,7 @@ export const listRequests = () => inventoryCall<SourcingRequest[]>("/sourcing/re
 export const getRequest = (id: string) => inventoryCall<RequestDetail>(`/sourcing/requests/${id}`)
 export const editRequest = (id: string, b: { subject?: string; body?: string; regenerate?: boolean }) => inventoryCall<SourcingRequest>(`/sourcing/requests/${id}`, { method: "PATCH", json: b })
 export const requestAction = (id: string, action: "submit" | "approve" | "reject" | "close") => inventoryCall<SourcingRequest>(`/sourcing/requests/${id}/${action}`, { method: "POST" })
-export const sendRequest = (id: string) => inventoryCall<{ sent: number; failed: number; status: string; invitees: Invitee[] }>(`/sourcing/requests/${id}/send`, { method: "POST" })
+export const sendRequest = (id: string) => inventoryCall<{ sent: number; failed: number; status: string; error?: string | null; invitees: Invitee[] }>(`/sourcing/requests/${id}/send`, { method: "POST" })
 export const recordResponse = (id: string, b: { invitee_id: string; unit_price?: number | null; lead_time_days?: number | null; moq?: number | null; valid_until?: string | null; notes?: string; declined?: boolean; source?: "manual" | "parsed" }) =>
   inventoryCall<QuoteResponse>(`/sourcing/requests/${id}/responses`, j(b))
 export const parseReply = (id: string, text: string) => inventoryCall<ParsedReply>(`/sourcing/requests/${id}/parse-reply`, j({ text }))
