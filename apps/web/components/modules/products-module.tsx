@@ -34,6 +34,7 @@ import { listPlans, type Plan } from "@/lib/products-api"
 import { listProducts, type Product as CatalogueProduct } from "@/lib/catalogue-api"
 import { CatalogueTab } from "./products/catalogue/catalogue-tab"
 import { EquipmentRegister } from "./products/equipment-register"
+import { SourcingTab } from "./suppliers/sourcing-tab"
 import { ProfitabilityPanel } from "./products/profitability-panel"
 import { SuppliersTab } from "./suppliers/suppliers-tab"
 
@@ -171,6 +172,7 @@ export function ProductsModule() {
             <TabsTrigger value="pricing">Pricing</TabsTrigger>
             <TabsTrigger value="catalogue">Catalogue</TabsTrigger>
             <TabsTrigger value="suppliers">Suppliers</TabsTrigger>
+            <TabsTrigger value="sourcing">Sourcing</TabsTrigger>
           </TabsList>
         </div>
 
@@ -267,6 +269,9 @@ export function ProductsModule() {
 
         <TabsContent value="suppliers" className="mt-4">
           <SuppliersTab />
+        </TabsContent>
+        <TabsContent value="sourcing" className="mt-4">
+          <SourcingTab />
         </TabsContent>
       </Tabs>
     </div>

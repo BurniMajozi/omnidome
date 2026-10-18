@@ -1,5 +1,6 @@
 "use client"
 
+import { ProtocolEditor } from "./admin/protocol-editor"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
@@ -1297,46 +1298,10 @@ export function AdminModule() {
               </Card>
             </TabsContent>
 
-            {/* ── PROTOCOLS & MANDATES TAB (read-only; no simulation, no invented policy values) ── */}
+            {/* ── PROTOCOLS & MANDATES TAB: editable limits, then the records agents created ── */}
             <TabsContent value="protocols">
               <div className="space-y-6">
-                <Card className="border-border bg-card">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Settings2 className="h-4 w-4 text-cyan-400" /> Protocol Policy
-                    </CardTitle>
-                    <CardDescription>
-                      UCP (Universal Commerce Protocol) and AP2 (Agent Payments Protocol) records created by agents for your organization.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="rounded-lg border border-border p-3.5 space-y-2 bg-secondary/20">
-                        <span className="font-semibold text-sm flex items-center gap-1.5">
-                          <LinkIcon className="h-4 w-4 text-cyan-400" />
-                          Universal Commerce Protocol (UCP)
-                        </span>
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>Auto-approve cart limit</span>
-                          <span className="font-medium text-foreground">Not configured here</span>
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-border p-3.5 space-y-2 bg-secondary/20">
-                        <span className="font-semibold text-sm flex items-center gap-1.5">
-                          <ShieldCheck className="h-4 w-4 text-purple-400" />
-                          Agent Payments Protocol (AP2)
-                        </span>
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>Dual-signature threshold</span>
-                          <span className="font-medium text-foreground">Not configured here</span>
-                        </div>
-                      </div>
-                    </div>
-                    <p className="mt-3 text-xs text-muted-foreground">
-                      The services expose no endpoint to read or change policy thresholds, so none are shown. Limits are set in the orchestrator service configuration.
-                    </p>
-                  </CardContent>
-                </Card>
+                <ProtocolEditor />
 
                 {/* Summary counts only for lists that actually loaded */}
                 <div className="grid gap-4 md:grid-cols-3">

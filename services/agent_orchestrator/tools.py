@@ -64,6 +64,7 @@ SERVICE_URLS = {
     "fno_intelligence": os.getenv("FNO_INTELLIGENCE_SERVICE_URL", "http://fno_intelligence:8024"),
     "hr": os.getenv("HR_SERVICE_URL", "http://hr:8009"),
     "portal": os.getenv("PORTAL_BUILDER_SERVICE_URL", "http://portal_builder:8018"),
+    "inventory": os.getenv("INVENTORY_SERVICE_URL", "http://inventory:8010"),
 }
 
 
@@ -145,6 +146,27 @@ TOOL_POLICIES: Dict[str, ToolPolicy] = {
     "hr.execute_wellness_action": ToolPolicy(mutates=True, requires_approval=True),
     "hr.get_attrition_risk": _READ,
     "hr.list_leave_requests": _READ,
+    # Procurement (inventory service). Reads are free; drafting and searching only prepare work; anything that contacts a supplier,
+    # picks one or commits money waits for a person. The tenant's procurement protocol (Admin -> Protocols) is enforced by the service.
+    "sourcing_get_protocol": _READ,
+    "sourcing_reorder_suggestions": ToolPolicy(mutates=False, timeout_s=30, max_output_chars=12000),
+    "sourcing_candidates": _READ,
+    "sourcing_list_prospects": _READ,
+    "sourcing_list_requests": _READ,
+    "sourcing_get_request": _READ,
+    "sourcing_compare_quotes": ToolPolicy(mutates=False, timeout_s=30, max_output_chars=12000),
+    "sourcing_parse_reply": ToolPolicy(mutates=False, timeout_s=60),
+    "supplier_scorecards": ToolPolicy(mutates=False, timeout_s=30, max_output_chars=12000),
+    "sourcing_find_suppliers": ToolPolicy(mutates=True, timeout_s=30),
+    "sourcing_discovery_status": ToolPolicy(mutates=True, timeout_s=30, max_output_chars=12000),
+    "sourcing_create_request": ToolPolicy(mutates=True, timeout_s=60),
+    "sourcing_submit_request": ToolPolicy(mutates=True),
+    "sourcing_record_reply": ToolPolicy(mutates=True),
+    "sourcing_run_reorder_scan": ToolPolicy(mutates=True, timeout_s=120),
+    "sourcing_send_request": ToolPolicy(mutates=True, requires_approval=True, timeout_s=90),
+    "sourcing_award_request": ToolPolicy(mutates=True, requires_approval=True),
+    "inventory_create_purchase_order": ToolPolicy(mutates=True, requires_approval=True),
+    "inventory_submit_purchase_order": ToolPolicy(mutates=True, requires_approval=True),
     # Tenant memory
     "memory.recall": _READ,
     "memory.write_entry": ToolPolicy(mutates=True),
@@ -844,6 +866,160 @@ class ToolRegistry:
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
+        # ── Procurement & sourcing tools (inventory service) ─────────────────
+        self.register(Tool(
+            name='sourcing_get_protocol',
+            description="Read the organisation's procurement protocol: who may be invited, how many suppliers per request, quotes needed before an award, spend limits, scoring weights, reorder rules and whether outreach needs approval. Check it before preparing any request.",
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/protocol',
+            parameters=json.loads('{"type": "object", "properties": {}, "required": []}'),
+        ))
+        self.register(Tool(
+            name='sourcing_reorder_suggestions',
+            description='Which launched stock products need buying, from product KPIs: sales per day, stock cover in days, quantity already on order, suggested quantity, preferred supplier, estimated spend and margin, with flags (low margin, no supplier, request already open).',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/reorder-suggestions',
+            parameters=json.loads('{"type": "object", "properties": {}, "required": []}'),
+        ))
+        self.register(Tool(
+            name='sourcing_candidates',
+            description='Who can be invited to quote for a product: its current suppliers, other suppliers (internal and external) with delivery scores and protocol eligibility, and web prospects.',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/candidates',
+            parameters=json.loads('{"type": "object", "properties": {"product_id": {"type": "string", "description": "Catalogue product id"}}, "required": ["product_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_list_prospects',
+            description='Suppliers found on the web that are not in the supplier master yet, best fit first.',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/prospects',
+            parameters=json.loads('{"type": "object", "properties": {"product_id": {"type": "string"}, "status": {"type": "string", "enum": ["new", "invited", "converted", "dismissed"]}}, "required": []}'),
+        ))
+        self.register(Tool(
+            name='sourcing_list_requests',
+            description='List RFI/RFQ requests with status, invitees and replies received.',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/requests',
+            parameters=json.loads('{"type": "object", "properties": {"status": {"type": "string"}, "product_id": {"type": "string"}}, "required": []}'),
+        ))
+        self.register(Tool(
+            name='sourcing_get_request',
+            description='One RFI/RFQ with its message, invitees and recorded replies.',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/requests/{request_id}',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}}, "required": ["request_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_compare_quotes',
+            description='Compare the replies to an RFQ: unit price, lead time, minimum order, margin at that price, delivery score, a 0-100 supply score and protocol flags. Says whether enough quotes are in to award.',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/requests/{request_id}/compare',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}}, "required": ["request_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_parse_reply',
+            description="Read the text of a supplier's email reply into price, lead time, minimum order and validity. Nothing is saved; confirm with sourcing_record_reply.",
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/requests/{request_id}/parse-reply',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}, "text": {"type": "string", "description": "The reply text"}}, "required": ["request_id", "text"]}'),
+        ))
+        self.register(Tool(
+            name='supplier_scorecards',
+            description='Delivery scorecards for every supplier: on-time rate, fill rate, rejections, returns, ratings and a composite score.',
+            service="inventory",
+            method='GET',
+            endpoint='/supplier-performance',
+            parameters=json.loads('{"type": "object", "properties": {}, "required": []}'),
+        ))
+        self.register(Tool(
+            name='sourcing_find_suppliers',
+            description='Search the web for suppliers of a catalogue product, using its description and specifications. Uses metered research credits; takes under a minute. Follow with sourcing_discovery_status.',
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/discoveries',
+            parameters=json.loads('{"type": "object", "properties": {"product_id": {"type": "string"}, "country": {"type": "string", "description": "Two-letter country code, default za"}, "note": {"type": "string"}}, "required": ["product_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_discovery_status',
+            description='Progress of a supplier search; when finished it returns the prospects found with a fit score.',
+            service="inventory",
+            method='GET',
+            endpoint='/sourcing/discoveries/{discovery_id}',
+            parameters=json.loads('{"type": "object", "properties": {"discovery_id": {"type": "string"}}, "required": ["discovery_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_create_request',
+            description="Prepare a DRAFT RFI (information) or RFQ (quotation) for a product with a list of invitees (supplier_id or prospect_id each). The message is AI-drafted from the product description and never includes our costs or prices. Nothing is sent. Respect the protocol's supplier limit.",
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/requests',
+            parameters=json.loads('{"type": "object", "properties": {"kind": {"type": "string", "enum": ["RFI", "RFQ"]}, "product_id": {"type": "string"}, "quantity": {"type": "integer"}, "needed_by": {"type": "string", "description": "YYYY-MM-DD"}, "target_price": {"type": "number", "description": "Internal only"}, "invitees": {"type": "array", "items": {"type": "object", "properties": {"supplier_id": {"type": "string"}, "prospect_id": {"type": "string"}, "email": {"type": "string"}}}}, "source": {"type": "string", "enum": ["agent"]}, "agent": {"type": "string", "description": "Your agent type"}}, "required": ["kind", "product_id", "invitees"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_submit_request',
+            description='Submit a draft request for approval (or straight to approved when the protocol does not require approval).',
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/requests/{request_id}/submit',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}}, "required": ["request_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_send_request',
+            description='Send an approved (or submitted) RFI/RFQ to its invitees: external suppliers by email, internal ones through the bell. A person approves this action before it runs.',
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/requests/{request_id}/send',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}}, "required": ["request_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_record_reply',
+            description="Record a supplier's reply to a request: unit price (ZAR ex VAT), lead time in days, minimum order, validity date and notes, or declined=true.",
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/requests/{request_id}/responses',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}, "invitee_id": {"type": "string"}, "unit_price": {"type": "number"}, "lead_time_days": {"type": "integer"}, "moq": {"type": "integer"}, "valid_until": {"type": "string"}, "notes": {"type": "string"}, "declined": {"type": "boolean"}}, "required": ["request_id", "invitee_id"]}'),
+        ))
+        self.register(Tool(
+            name='sourcing_run_reorder_scan',
+            description='Scan product KPIs and prepare a draft RFQ for each stock product that needs buying and has no open request. Drafts only; people approve before anything is sent.',
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/automation/run',
+            parameters=json.loads('{"type": "object", "properties": {"agent": {"type": "string", "description": "Your agent type"}}, "required": []}'),
+        ))
+        self.register(Tool(
+            name='sourcing_award_request',
+            description="Award an RFQ to one supplier after the protocol's minimum number of quotes (a written reason can override). A person approves this before it runs. A web prospect becomes a supplier.",
+            service="inventory",
+            method='POST',
+            endpoint='/sourcing/requests/{request_id}/award',
+            parameters=json.loads('{"type": "object", "properties": {"request_id": {"type": "string"}, "invitee_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["request_id", "invitee_id"]}'),
+        ))
+        self.register(Tool(
+            name='inventory_create_purchase_order',
+            description='Create a DRAFT purchase order for a supplier and warehouse. Products must come from Product Management. A person approves this before it is created.',
+            service="inventory",
+            method='POST',
+            endpoint='/purchase-orders',
+            parameters=json.loads('{"type": "object", "properties": {"supplier_id": {"type": "string"}, "warehouse_id": {"type": "string"}, "items": {"type": "array", "items": {"type": "object", "properties": {"product_id": {"type": "string", "description": "Inventory product id"}, "quantity_ordered": {"type": "integer"}, "unit_cost_zar": {"type": "string"}}, "required": ["product_id", "quantity_ordered", "unit_cost_zar"]}}}, "required": ["supplier_id", "warehouse_id", "items"]}'),
+        ))
+        self.register(Tool(
+            name='inventory_submit_purchase_order',
+            description='Submit a draft purchase order into the approval journey (auto-approved under the spend limit, otherwise a manager signs). A person approves this action first.',
+            service="inventory",
+            method='POST',
+            endpoint='/purchase-orders/{po_id}/submit',
+            parameters=json.loads('{"type": "object", "properties": {"po_id": {"type": "string"}}, "required": ["po_id"]}'),
+        ))
+
         # ── Talent & HR Tools ───────────────────────────────────────
         self.register(Tool(
             name="talent_list_employees",
@@ -1040,7 +1216,17 @@ class ToolRegistry:
         EMAIL_WRITE_TOOLS = ["email.draft_reply", "email.send_reply"]     # send_reply is approval-gated
         PERSONAL_TOOLS_LIST = ["my.day", "my.tasks", "my.escalations", "my.schedule", "my.kpis", "my.approvals"]
         PERSONAL_AGENTS = ("assistant", "executive", "support", "retention", "crm", "call_center", "talent", "billing", "analytics", "products")
+        SOURCING_READ = ["sourcing_get_protocol", "sourcing_reorder_suggestions", "sourcing_candidates", "sourcing_list_prospects", "sourcing_list_requests",
+                         "sourcing_get_request", "sourcing_compare_quotes", "supplier_scorecards"]
+        PROCUREMENT_TOOLS = SOURCING_READ + ["sourcing_parse_reply", "sourcing_find_suppliers", "sourcing_discovery_status", "sourcing_create_request",
+                                             "sourcing_submit_request", "sourcing_send_request", "sourcing_record_reply", "sourcing_run_reorder_scan",
+                                             "sourcing_award_request", "inventory_create_purchase_order", "inventory_submit_purchase_order"]
         AGENT_TOOL_PERMISSIONS = {
+            "procurement": [
+                "products_list_plans", "finance_get_financial_summary",
+                "analytics_get_executive_summary",
+                "memory.recall", "memory.write_entry",
+            ] + PROCUREMENT_TOOLS + EMAIL_READ_TOOLS,
             "customer_facing": [
                 "crm_get_customer", "crm_get_customer_360",
                 "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
@@ -1148,8 +1334,10 @@ class ToolRegistry:
                 _tools.extend(t for t in ("skills.find", "skills.get") if t not in _tools)   # read-only; guidance, not capability
             if _agent != "customer_facing" and "artifacts.find" not in _tools:
                 _tools.append("artifacts.find")       # internal work product: never for the customer-facing agent
-            if _agent in ("executive", "analytics", "assistant", "billing", "retention", "products"):
+            if _agent in ("executive", "analytics", "assistant", "billing", "retention", "products", "procurement"):
                 _tools.extend(t for t in METRIC_TOOLS if t not in _tools)
+            if _agent in ("executive", "assistant", "products", "analytics"):      # they can see what is being bought, not buy it
+                _tools.extend(t for t in SOURCING_READ if t not in _tools)
             if _agent in ("support", "crm", "billing", "retention", "call_center", "assistant", "executive"):
                 _tools.extend(t for t in EMAIL_READ_TOOLS if t not in _tools)     # never customer_facing / provisioning
             if _agent in ("support", "crm", "billing", "assistant"):

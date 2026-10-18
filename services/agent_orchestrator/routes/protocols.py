@@ -10,6 +10,7 @@ from typing import Any, Optional
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 
 from services.agent_orchestrator import run_registry, skills_runtime
@@ -37,6 +38,7 @@ from services.agent_orchestrator.protocol_models import (
     AP2IntentMandateRecord,
     AP2PaymentMandateRecord,
     AP2PaymentReceiptRecord,
+    ProtocolPolicyRecord,
     UCPCheckoutSessionRecord,
 )
 from services.common.auth import AuthContext, get_auth_context
@@ -467,6 +469,56 @@ async def ucp_profile():
     }
 
 
+# ── editable policy ──────────────────────────────────────────────────────────
+
+class ProtocolPolicy(BaseModel):
+    """The limits agents work within when they buy or hold mandates. Edited by tenant admins (Admin -> Protocols)."""
+    model_config = ConfigDict(extra="forbid")
+    ucp_auto_approve_limit_zar: float = Field(500.0, ge=0, le=10_000_000)     # carts above this wait for a person
+    ap2_max_mandate_amount_zar: float = Field(0.0, ge=0, le=100_000_000)      # biggest amount one mandate may authorise (0 = no cap)
+    ap2_max_expiry_minutes: int = Field(1440, ge=1, le=1440)                   # longest a mandate may stay valid
+    ap2_force_user_confirmation: bool = False                                  # every mandate must be confirmed by a person
+
+
+def _policy_defaults() -> dict:
+    return ProtocolPolicy(ucp_auto_approve_limit_zar=settings.ucp_auto_approve_limit_zar).model_dump()
+
+
+async def load_policy(session, tenant_id) -> ProtocolPolicy:
+    row = (await session.execute(select(ProtocolPolicyRecord).where(ProtocolPolicyRecord.tenant_id == tenant_id))).scalar_one_or_none()
+    base = _policy_defaults()
+    if row:
+        base.update({k: v for k, v in (row.config or {}).items() if k in base})
+    try:
+        return ProtocolPolicy(**base)
+    except Exception:  # noqa: BLE001 - an invalid stored value must not block commerce
+        return ProtocolPolicy(**_policy_defaults())
+
+
+def _require_policy_admin(ctx: AuthContext) -> None:
+    roles = {r.lower() for r in ctx.roles}
+    if not (ctx.is_platform_admin or roles & {"admin", "org_admin", "tenant_admin", "owner"}):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an organisation admin can change protocol limits")
+
+
+@router.get("/api/protocols/policy")
+async def get_protocol_policy(ctx: AuthContext = Depends(get_auth_context), session=Depends(get_async_session)):
+    row = (await session.execute(select(ProtocolPolicyRecord).where(ProtocolPolicyRecord.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    return {"policy": (await load_policy(session, ctx.tenant_id)).model_dump(), "defaults": _policy_defaults(), "customised": row is not None}
+
+
+@router.put("/api/protocols/policy")
+async def put_protocol_policy(body: ProtocolPolicy, ctx: AuthContext = Depends(get_auth_context), session=Depends(get_async_session)):
+    """Replace the tenant's limits. Applies to carts and mandates created from now on; existing ones are not changed."""
+    _require_policy_admin(ctx)
+    row = (await session.execute(select(ProtocolPolicyRecord).where(ProtocolPolicyRecord.tenant_id == ctx.tenant_id))).scalar_one_or_none()
+    if row is None:
+        session.add(ProtocolPolicyRecord(tenant_id=ctx.tenant_id, config=body.model_dump(), updated_by=str(ctx.user_id)))
+    else:
+        row.config, row.updated_by = body.model_dump(), str(ctx.user_id)
+    return {"policy": body.model_dump()}
+
+
 @router.post("/api/protocols/ucp/checkout-sessions", response_model=UCPCheckoutSession)
 async def create_checkout_session(
     body: UCPCheckoutCreateRequest,
@@ -474,8 +526,9 @@ async def create_checkout_session(
     session=Depends(get_async_session),
 ):
     correlation = _correlation_id()
+    policy = await load_policy(session, ctx.tenant_id)
     checkout = UCPCheckoutSession(
-        status="requires_approval" if body.total > settings.ucp_auto_approve_limit_zar else "created",
+        status="requires_approval" if body.total > policy.ucp_auto_approve_limit_zar else "created",
         total=body.total,
         merchant=body.merchant,
         purpose=body.purpose,
@@ -606,6 +659,15 @@ async def create_intent_mandate(
     session=Depends(get_async_session),
 ):
     correlation = _correlation_id()
+    policy = await load_policy(session, ctx.tenant_id)
+    if policy.ap2_max_mandate_amount_zar and body.max_amount > policy.ap2_max_mandate_amount_zar:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"A mandate may authorise at most R{policy.ap2_max_mandate_amount_zar:,.2f} under the protocol policy")
+    if body.expires_in_minutes > policy.ap2_max_expiry_minutes:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"A mandate may stay valid for at most {policy.ap2_max_expiry_minutes} minutes under the protocol policy")
+    if policy.ap2_force_user_confirmation:
+        body.requires_user_confirmation = True
     mandate = IntentMandate.from_create(body)
 
     record = AP2IntentMandateRecord(

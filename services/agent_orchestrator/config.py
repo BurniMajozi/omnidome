@@ -60,6 +60,7 @@ class Settings(BaseSettings):
         "talent":         ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
         "call_center":    ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
         "products":       ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "procurement":    ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
         "analytics":      ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
     }
 

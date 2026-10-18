@@ -93,6 +93,11 @@ _INTENT_ROUTES: list[tuple[str, list[str]]] = [
         "analytics", "sql", "query", "data", "metric", "trend",
         "network health", "conversion", "funnel",
     ]),
+    # 8b. Buying stock: suppliers, RFI/RFQ, reorders, purchase orders -> BuyBot
+    ("procurement", [
+        "supplier", "rfq", "rfi", "request for quot", "quotation", "reorder", "re-order",
+        "purchase order", "procure", "buy stock", "sourcing", "stock cover", "lead time",
+    ]),
     # 9. Fibre plans, bundles & pricing catalog -> ProductBot
     ("products", [
         "product", "plan", "bundle", "pricing", "package",
@@ -374,6 +379,7 @@ def list_builtin_agents() -> list[AgentInfo]:
         _info("analytics", "MetricBot — MRR, conversion and network analytics"),
         _info("call_center", "CallBot — call-centre queues, wait times and SLAs"),
         _info("products", "ProductBot — fibre plans, bundles and pricing"),
+        _info("procurement", "BuyBot — finds suppliers, runs RFI/RFQs, scores quotes and buys stock within your procurement protocol"),
         _info("talent", "StaffBot — HR rosters, attrition risk and leave"),
     ]
     return agents

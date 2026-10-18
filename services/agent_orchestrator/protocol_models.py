@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    UniqueConstraint,
     Column,
     DateTime,
     Float,
@@ -16,6 +17,16 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 
 from services.common.db import Base
+
+
+class ProtocolPolicyRecord(Base):
+    """A tenant's editable limits for the commerce protocols (UCP carts, AP2 mandates). One row per tenant."""
+    __tablename__ = "agent_protocol_policies"
+    __table_args__ = (UniqueConstraint("tenant_id", name="uq_protocol_policy_tenant"),)
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    config = Column(JSONB, nullable=False, default={})
+    updated_by = Column(String(64), nullable=True)
 
 
 class UCPCheckoutSessionRecord(Base):

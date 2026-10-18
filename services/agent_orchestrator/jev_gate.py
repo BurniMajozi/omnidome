@@ -401,7 +401,7 @@ class JevVerificationVerdict:
 
 TRIAGE_AGENT_OPTIONS = (
     "support", "billing", "provisioning", "retention",
-    "sales", "call_center", "talent", "analytics", "products", "assistant",
+    "sales", "call_center", "talent", "analytics", "products", "procurement", "assistant",
 )
 TRIAGE_MIN_CONFIDENCE = float(os.getenv("JEV_TRIAGE_MIN_CONFIDENCE", "0.6"))
 
@@ -466,6 +466,7 @@ async def triage_inbound_inquiry(
         "talent": "HR, payroll, employee shifts, leave, or internal staff wellness.",
         "analytics": "SQL queries, data metrics, historical trends, or network telemetry statistics.",
         "products": "Fibre plan catalogs, bundled services, router specs, or hardware options.",
+        "procurement": "Finding suppliers, RFI/RFQ requests, supplier quotes and scores, reordering stock, or purchase orders.",
         "assistant": "General inquiries or questions that do not fit into other specialized categories."
     }
 

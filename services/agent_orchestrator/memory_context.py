@@ -43,6 +43,7 @@ AGENT_MODULES: Dict[str, Optional[str]] = {
     "analytics": "analytics",
     "call_center": "call_center",
     "products": "products",
+    "procurement": "inventory",
     "talent": "hr",
     "billing": "billing",
     "crm": "crm",

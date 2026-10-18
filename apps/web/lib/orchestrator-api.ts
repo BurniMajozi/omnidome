@@ -1228,3 +1228,34 @@ export const rejectApproval = (id: string, reason?: string) =>
     body: JSON.stringify({ reason }),
   })
 
+
+// ── Editable protocol limits (UCP carts, AP2 mandates) ───────────────────
+
+export interface ProtocolPolicy {
+  ucp_auto_approve_limit_zar: number
+  ap2_max_mandate_amount_zar: number
+  ap2_max_expiry_minutes: number
+  ap2_force_user_confirmation: boolean
+}
+
+async function policyError(res: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await res.json()
+    const d = body?.detail
+    return new Error(typeof d === "string" ? d : Array.isArray(d) ? d.map((x: { msg?: string }) => x.msg).filter(Boolean).join("; ") : fallback)
+  } catch {
+    return new Error(fallback)
+  }
+}
+
+export async function getProtocolPolicy(): Promise<{ policy: ProtocolPolicy; defaults: ProtocolPolicy; customised: boolean }> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/policy`)
+  if (!res.ok) throw await policyError(res, `Could not load protocol limits (${res.status})`)
+  return res.json()
+}
+
+export async function saveProtocolPolicy(policy: ProtocolPolicy): Promise<ProtocolPolicy> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/policy`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(policy) })
+  if (!res.ok) throw await policyError(res, `Could not save protocol limits (${res.status})`)
+  return (await res.json()).policy
+}

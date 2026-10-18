@@ -19,6 +19,7 @@ from services.inventory.routes.catalogue import router as catalogue_router
 from services.inventory.routes.supplier_perf import router as supplier_perf_router
 from services.inventory.routes.reports import router as reports_router
 from services.inventory.routes.supplier_payments import router as supplier_payments_router
+from services.inventory.routes.sourcing import router as sourcing_router
 
 app = FastAPI(title="CoreConnect Inventory Service", version="0.2.0")
 guard = EntitlementGuard(module_id="inventory")
@@ -29,6 +30,7 @@ app.include_router(catalogue_router)
 app.include_router(supplier_perf_router)
 app.include_router(supplier_payments_router)
 app.include_router(reports_router)
+app.include_router(sourcing_router)
 
 @app.get("/health", tags=["Health"])
 async def health():

@@ -18,7 +18,7 @@ SERVICE_DIRS = {
     "crm": "crm", "billing": "billing", "network": "network", "retention": "retention",
     "support": "support", "analytics": "analytics", "sales": "sales", "finance": "finance",
     "call_center": "call_center", "communication": "communication", "memory": "tenant_memory",
-    "fno_intelligence": "fno_intelligence", "hr": "hr", "portal": "portal_builder",
+    "fno_intelligence": "fno_intelligence", "hr": "hr", "portal": "portal_builder", "inventory": "inventory",
 }
 IN_PROCESS = {"orchestrator", "internal"}  # handled inside the agent loop, no HTTP call
 METHODS = {"get", "post", "put", "patch", "delete"}

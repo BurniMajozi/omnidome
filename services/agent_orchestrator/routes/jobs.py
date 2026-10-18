@@ -24,7 +24,7 @@ from services.agent_orchestrator.routes.agents import _may_manage_agents
 router = APIRouter(tags=["agent-work"])
 
 RUNNABLE_BUILTINS = frozenset({"assistant", "executive", "retention", "provisioning", "support",
-                              "analytics", "call_center", "products", "talent", "customer_facing"})
+                              "analytics", "call_center", "products", "talent", "customer_facing", "procurement"})
 
 
 def require_operator(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:

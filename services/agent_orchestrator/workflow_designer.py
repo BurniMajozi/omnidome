@@ -9,7 +9,7 @@ from services.agent_orchestrator.agents import Agent
 from services.common.rate_limiter import RateLimiter
 limiter = RateLimiter(max_requests=12, window_seconds=600)
 
-AGENTS = {"assistant", "executive", "customer_facing", "support", "retention", "provisioning", "sales", "billing", "analytics", "products", "talent"}
+AGENTS = {"assistant", "executive", "customer_facing", "support", "retention", "provisioning", "sales", "billing", "analytics", "products", "talent", "procurement"}
 from services.agent_orchestrator.workflow_catalog import EVENT_LABELS
 EVENTS = set(EVENT_LABELS)
 
