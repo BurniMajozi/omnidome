@@ -77,6 +77,10 @@ async def post_movement_journal(db, tenant_id, move, key):
     value = Decimal(str(cost)) * move.quantity
     source_id = hashlib.sha1((key or "").encode()).hexdigest()
     day = datetime.now(timezone.utc).date()
+    if move.movement_type == "SALE":
+        from services.inventory import asset_register
+        if await asset_register.capitalise(db, tenant_id, move.product_id, move.quantity, cost, day, "issue", (key or "")[:100]):
+            return          # equipment given to a customer is carried and amortised, not expensed
     journal = writeoff_journal(source_id, value, day) if move.movement_type == "WRITE_OFF" else dispatch_journal(source_id, value, day, "to customer")
     finance_outbox.enqueue_payload(db, tenant_id, journal, value)
 
@@ -161,7 +165,12 @@ async def checkout(db, tenant_id, user_id, payload, key):
     await db.flush()
     costs = {pid: Decimal(str(c or 0)) for pid, c in (await db.execute(select(Product.id, Product.cost_price).where(
         Product.tenant_id == tenant_id, Product.id.in_([p for p, _ in resolved])))).all()}
-    value = sum((costs.get(pid, Decimal(0)) * item.quantity for pid, item in resolved), Decimal(0))
+    from services.inventory import asset_register
+    day = datetime.now(timezone.utc).date()
+    value = Decimal(0)
+    for pid, item in resolved:
+        if not await asset_register.capitalise(db, tenant_id, pid, item.quantity, costs.get(pid, Decimal(0)), day, "issue", (payload.job_id or marker)[:100]):
+            value += costs.get(pid, Decimal(0)) * item.quantity
     finance_outbox.enqueue_payload(db, tenant_id, dispatch_journal(hashlib.sha1(marker.encode()).hexdigest(), value,
                                                                   datetime.now(timezone.utc).date(), payload.job_id or ""), value)
     return response

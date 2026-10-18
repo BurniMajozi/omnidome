@@ -14,7 +14,7 @@ import { StepMedia, StepResearch } from "./steps-content"
 import { StepLaunch, StepReview } from "./steps-launch"
 import { fromProduct, toInput, type Form, type Preview } from "./wizard-types"
 
-const STEPS = ["Definition", "Suppliers & costs", "Included products", "Selling price & fees", "Media & documents", "Research & KPIs", "Testing & ICASA", "Review"]
+const STEPS = ["Definition", "Suppliers & costs", "Included products", "Selling price & fees", "Media & documents", "Research & KPIs", "Test/Regulation", "Review"]
 
 const blankForm = (): Form => ({
   status: "draft", product_number: "", custom_number: "", name: "", category: "", range: "", family: "",

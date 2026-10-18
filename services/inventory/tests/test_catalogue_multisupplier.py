@@ -384,3 +384,28 @@ def test_sold_products_are_unchanged():
     d = {"description": "d", "price": 100, "recurring": False, "costs": [{"name": "c", "supplier": "s", "amount": 40, "cadence": "Once-off"}]}
     e = rules.economics("a", {"a": _view("a", d, usage="Customer-facing")})
     assert e["profit"] == 60 and "amortisation_monthly" not in e
+
+
+# ── equipment register ──────────────────────────────────────────────────────────
+
+def test_only_amortised_assets_and_issued_giveaways_are_capitalised():
+    from decimal import Decimal
+    from services.inventory import asset_register as ar
+    asset = {"offer": {"mode": "asset", "life_months": 12, "residual_value": 100}}
+    given = {"offer": {"mode": "given", "life_months": 36}}
+    assert ar.capitalised_offer(asset, "receipt")["residual"] == Decimal("100.00") and ar.capitalised_offer(asset, "issue") is None
+    assert ar.capitalised_offer(given, "issue")["life_months"] == 36 and ar.capitalised_offer(given, "receipt") is None
+    assert ar.capitalised_offer({"offer": {"mode": "given", "life_months": 0}}, "issue") is None      # no life: expensed on dispatch, as before
+    assert ar.capitalised_offer({"offer": {"mode": "sold", "life_months": 12}}, "receipt") is None
+    assert ar.capitalised_offer({}, "receipt") is None
+
+
+def test_month_maths_and_monthly_charge():
+    from datetime import date
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from services.inventory import asset_register as ar
+    assert ar.month_end(2026, 2) == date(2026, 2, 28) and ar.month_end(2028, 2) == date(2028, 2, 29)
+    assert ar.add_months(2026, 11, 3) == (2027, 2) and ar.add_months(2026, 12, 0) == (2026, 12)
+    b = SimpleNamespace(quantity=3, unit_cost=Decimal("900"), residual=Decimal("90"), life_months=36)
+    assert ar.monthly_charge(b) == Decimal("67.50")                      # 3 x (900 - 90) / 36

@@ -33,6 +33,7 @@ import { MarketWatchView } from "./products/market-watch-view"
 import { listPlans, type Plan } from "@/lib/products-api"
 import { listProducts, type Product as CatalogueProduct } from "@/lib/catalogue-api"
 import { CatalogueTab } from "./products/catalogue/catalogue-tab"
+import { EquipmentRegister } from "./products/equipment-register"
 import { ProfitabilityPanel } from "./products/profitability-panel"
 import { SuppliersTab } from "./suppliers/suppliers-tab"
 
@@ -175,6 +176,7 @@ export function ProductsModule() {
 
         <TabsContent value="overview" className="mt-4 space-y-4">
           <ProfitabilityPanel />
+          <EquipmentRegister />
           <Card className="border-border bg-card">
             <CardHeader>
               <CardTitle className="text-base">Product Mix</CardTitle>

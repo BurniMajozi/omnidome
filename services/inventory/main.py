@@ -43,6 +43,9 @@ async def startup_entitlements() -> None:
 
 
     schedule_background(finance_outbox.retry_loop())      # queued journals keep retrying until finance accepts them
+    from services.inventory import asset_register
+    asset_register.install_return_hook()                   # customer returns of given equipment come back at net book value
+    schedule_background(asset_register.depreciation_loop())  # month-end depreciation of equipment, posted to finance
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)

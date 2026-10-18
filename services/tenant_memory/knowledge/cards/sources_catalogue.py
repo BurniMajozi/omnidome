@@ -69,10 +69,10 @@ async def fetch_factsheets(session, tenant: str, wm: Optional[dict], limit: int)
     if not await table_exists(session, "catalogue_assets"):
         return S.Page()
     ks, kp = S._keyset("a.created_at", "a.id::text", wm)
-    rows = await S._rows(session, "SELECT a.filename, a.product_id::text AS product_id, a.text, p.product_number, p.name AS product_name, "
+    rows = await S._rows(session, "SELECT a.filename, a.purpose, a.title, a.product_id::text AS product_id, a.text, p.product_number, p.name AS product_name, "
                                   "a.created_at AS ts, a.id::text AS id FROM catalogue_assets a "
                                   "JOIN catalogue_products p ON p.id = a.product_id AND p.tenant_id = a.tenant_id "
-                                  f"WHERE a.tenant_id = CAST(:tenant_id AS uuid) AND a.purpose = 'fact_sheet' AND a.text IS NOT NULL{ks} "
+                                  f"WHERE a.tenant_id = CAST(:tenant_id AS uuid) AND a.purpose IN ('fact_sheet', 'certificate') AND a.text IS NOT NULL{ks} "
                                   "ORDER BY a.created_at, a.id::text LIMIT :limit", {"tenant_id": tenant, "limit": limit, **kp})
     page = S.Page()
     S._track(page, rows)
@@ -84,7 +84,7 @@ async def ids_factsheets(session, tenant: str) -> dict:
     from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable, table_exists
     if not await table_exists(session, "catalogue_assets"):
         raise SourceUnavailable("table catalogue_assets does not exist; refusing to reconcile catalogue_factsheets")
-    rows = await S._rows(session, "SELECT id::text AS id FROM catalogue_assets WHERE tenant_id = CAST(:t AS uuid) AND purpose = 'fact_sheet' AND text IS NOT NULL", {"t": tenant})
+    rows = await S._rows(session, "SELECT id::text AS id FROM catalogue_assets WHERE tenant_id = CAST(:t AS uuid) AND purpose IN ('fact_sheet', 'certificate') AND text IS NOT NULL", {"t": tenant})
     return {"catalogue_factsheet": {r["id"] for r in rows}}
 
 

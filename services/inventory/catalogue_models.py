@@ -6,9 +6,9 @@ lifecycle and the tenant-unique product number are real columns so they can be c
 Portable column types keep the API testable on SQLite while using JSONB/UUID on Postgres.
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import Boolean, Date, DateTime, Index, Integer, JSON, LargeBinary, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -95,7 +95,8 @@ class CatalogueAsset(Base):
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    purpose: Mapped[str | None] = mapped_column(String(20), nullable=True)     # fact_sheet | None
+    purpose: Mapped[str | None] = mapped_column(String(20), nullable=True)     # fact_sheet | certificate | None
+    title: Mapped[str | None] = mapped_column(String(160), nullable=True)      # the name the user gave a certificate
     text: Mapped[str | None] = mapped_column(Text, nullable=True)               # extracted text of a fact sheet
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -156,4 +157,27 @@ class InventoryUnit(Base):
     serial: Mapped[str | None] = mapped_column(String(100), nullable=True)
     mac: Mapped[str | None] = mapped_column(String(17), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="in_stock")   # in_stock | issued | returned | scrapped
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class InventoryAsset(Base):
+    """A batch of units carried as equipment (PP&E) and amortised monthly: company assets from receipt, given-away items
+    from the moment they are issued to a customer. ``quantity`` falls as units come back or are disposed of."""
+    __tablename__ = "inventory_assets"
+    __table_args__ = (Index("ix_assets_tenant_status", "tenant_id", "status"), Index("ix_assets_product", "tenant_id", "product_id"))
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)            # inventory_products.id
+    catalogue_product_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    origin: Mapped[str] = mapped_column(String(10), nullable=False)                 # receipt | issue
+    reference: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    residual: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)   # per unit, at the end of life
+    life_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    in_service: Mapped[date] = mapped_column(Date, nullable=False)
+    depreciated_months: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    accumulated: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")     # active | fully_depreciated | returned | disposed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

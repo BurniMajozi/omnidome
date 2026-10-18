@@ -5,7 +5,7 @@ import { Download, ExternalLink, FileText, Loader2, Plus, Sparkles, Star, Trash2
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { deleteAsset, downloadAsset, uploadAsset, type Asset, type Competitor } from "@/lib/catalogue-api"
+import { deleteAsset, downloadAsset, renameCertificate, uploadAsset, type Asset, type Competitor } from "@/lib/catalogue-api"
 import { getResearch, startResearch } from "@/lib/analytics-ai-api"
 import { UsageIndicator } from "@/components/modules/analytics/shared"
 import { AuthImage, Field, kpiSet, money, selectCls } from "./shared"
@@ -25,6 +25,8 @@ export function StepMedia({ form, setDef, ensureSaved, notify }: StepProps) {
   const mediaInput = useRef<HTMLInputElement>(null)
   const docInput = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
+  const certInput = useRef<HTMLInputElement>(null)
+  const [certName, setCertName] = useState("")
 
   async function add(files: FileList | null, group: "media" | "documents") {
     if (!files?.length) return
@@ -58,6 +60,40 @@ export function StepMedia({ form, setDef, ensureSaved, notify }: StepProps) {
       setBusy(false)
       if (mediaInput.current) mediaInput.current.value = ""
       if (docInput.current) docInput.current.value = ""
+    }
+  }
+
+  async function addCertificate(files: FileList | null) {
+    const file = files?.[0]
+    if (!file) return
+    const name = certName.trim()
+    if (!name) { notify("Name the certificate first."); if (certInput.current) certInput.current.value = ""; return }
+    if (!DOC_EXT.includes(ext(file.name))) { notify("A certificate must be a PDF, DOCX or TXT file."); return }
+    if (file.size > 15 * 1024 * 1024) { notify(`${file.name} exceeds 15 MB.`); return }
+    setBusy(true)
+    try {
+      const id = await ensureSaved()
+      const r = await uploadAsset(id, file, "certificate", name)
+      setDef({ documents: [...d.documents, { id: r.id, name: r.name, title: name, kind: "Document", extension: r.extension, size: r.size, url: r.url, alt: name,
+        visibility: "Internal only", primary: false, category: "Internal certificate", version: "1", effective: new Date().toISOString().slice(0, 10), acceptance: false }] })
+      setCertName("")
+      notify(`Certificate “${name}” added and read for the knowledge base.`)
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not upload the certificate")
+    } finally {
+      setBusy(false)
+      if (certInput.current) certInput.current.value = ""
+    }
+  }
+
+  async function renameCert(a: Asset, title: string) {
+    const t = title.trim()
+    if (!t || t === a.title) return
+    try {
+      await renameCertificate(form.id!, a.id, t)
+      patchAsset("documents", a.id, { title: t, alt: t })
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not rename the certificate")
     }
   }
 
@@ -110,13 +146,39 @@ export function StepMedia({ form, setDef, ensureSaved, notify }: StepProps) {
       )}
 
       <div className="space-y-3 rounded-lg border border-border p-4">
+        <div>
+          <h4 className="text-xs font-semibold text-foreground">Internal certificates</h4>
+          <p className="text-[11px] text-muted-foreground">Type approvals, safety, compliance or test certificates for your own records. Name each one, then add the PDF, DOCX or TXT. They stay internal and are added to the knowledge base so they can be found by name.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Certificate name"><Input value={certName} onChange={(e) => setCertName(e.target.value)} placeholder="e.g. ICASA type approval, CE declaration" className="h-9 w-72 text-xs" maxLength={160} /></Field>
+          <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 text-xs" disabled={busy || !certName.trim()} onClick={() => certInput.current?.click()}><Upload className="h-3.5 w-3.5" /> Add certificate</Button>
+          <input ref={certInput} type="file" hidden accept={DOC_EXT.map((e) => `.${e}`).join(",")} onChange={(e) => void addCertificate(e.target.files)} />
+        </div>
+        {d.documents.filter((a) => a.category === "Internal certificate").length === 0 && <p className="text-xs text-muted-foreground">No certificates yet.</p>}
+        {d.documents.filter((a) => a.category === "Internal certificate").map((a) => (
+          <div key={a.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card/60 px-3 py-2 text-xs">
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <FileText className="h-4 w-4 shrink-0 text-primary" />
+              <Input defaultValue={a.title || a.name} aria-label={`Name of ${a.name}`} maxLength={160} className="h-8 text-xs" onBlur={(e) => void renameCert(a, e.target.value)} />
+              <span className="shrink-0 text-muted-foreground">{a.name}</span>
+            </span>
+            <span className="flex gap-1.5">
+              <Button type="button" variant="outline" size="sm" className="h-8 w-8 p-0" aria-label={`Download ${a.title || a.name}`} onClick={() => void downloadAsset(a)}><Download className="h-3.5 w-3.5" /></Button>
+              <Button type="button" variant="outline" size="sm" className={iconDanger} aria-label={`Remove ${a.title || a.name}`} onClick={() => void remove("documents", a)}><Trash2 className="h-3.5 w-3.5" /></Button>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-border p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div><h4 className="text-xs font-semibold text-foreground">Documents</h4><p className="text-[11px] text-muted-foreground">T&amp;C documents, fee schedules, instructions, manuals, warranties. PDF, DOCX or TXT, up to 15 MB.</p></div>
           <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs" disabled={busy} onClick={() => docInput.current?.click()}><Upload className="h-3.5 w-3.5" /> Add documents</Button>
           <input ref={docInput} type="file" multiple hidden accept={DOC_EXT.map((e) => `.${e}`).join(",")} onChange={(e) => void add(e.target.files, "documents")} />
         </div>
-        {d.documents.length === 0 && <p className="text-xs text-muted-foreground">No documents attached yet.</p>}
-        {d.documents.map((a) => (
+        {d.documents.filter((a) => a.category !== "Internal certificate").length === 0 && <p className="text-xs text-muted-foreground">No documents attached yet.</p>}
+        {d.documents.filter((a) => a.category !== "Internal certificate").map((a) => (
           <div key={a.id} className="rounded-lg border border-border bg-card/60 p-3">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-foreground"><FileText className="h-4 w-4 text-primary" />{a.name}</span>

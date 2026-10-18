@@ -115,6 +115,8 @@ export interface Fee {
   policy_ref?: string | null
 }
 export interface Asset {
+  /** The name the user gave an internal certificate. */
+  title?: string
   id: string
   name: string
   kind: string
@@ -299,6 +301,8 @@ export const productHistory = (id: string) => call<HistoryEvent[]>(`/products/${
 export const previewProduct = (body: ProductInput, productId?: string) =>
   call<{ checks: Check[]; ready_to_launch: boolean; economics?: Economics; margin_matrix?: MarginMatrix }>(`/preview${productId ? `?product_id=${productId}` : ""}`, { method: "POST", json: body })
 
+export const renameCertificate = (productId: string, assetId: string, title: string) =>
+  call<{ id: string; title: string }>(`/products/${productId}/assets/${assetId}`, { method: "PATCH", json: { title } })
 export const setBarcode = (id: string, b: { mode: "generate" | "manufacturer" | "clear"; value?: string }) =>
   call<Product>(`/products/${id}/barcode`, { method: "POST", json: b })
 export interface DescriptionDraft { text: string; method: "ai" | "extract"; model: string | null; sheets: string[]; note?: string }
@@ -311,8 +315,8 @@ export const renameListValue = (id: string, name: string) => call<{ updated_prod
 export const deleteListValue = (id: string) => call<{ deleted: boolean }>(`/lists/${id}`, { method: "DELETE" })
 
 /** Upload raw bytes (the server validates type, magic bytes and size). Returns the asset metadata. */
-export async function uploadAsset(productId: string, file: File, purpose?: "fact_sheet"): Promise<Pick<Asset, "id" | "name" | "kind" | "extension" | "size" | "url"> & { text_chars?: number | null }> {
-  return call(`/products/${productId}/assets?filename=${encodeURIComponent(file.name)}${purpose ? `&purpose=${purpose}` : ""}`, {
+export async function uploadAsset(productId: string, file: File, purpose?: "fact_sheet" | "certificate", title?: string): Promise<Pick<Asset, "id" | "name" | "kind" | "extension" | "size" | "url"> & { text_chars?: number | null; title?: string | null }> {
+  return call(`/products/${productId}/assets?filename=${encodeURIComponent(file.name)}${purpose ? `&purpose=${purpose}` : ""}${title ? `&title=${encodeURIComponent(title)}` : ""}`, {
     method: "POST",
     body: file,
     headers: { "Content-Type": "application/octet-stream" },

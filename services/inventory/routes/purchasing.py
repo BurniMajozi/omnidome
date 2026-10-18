@@ -760,13 +760,6 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
         raise HTTPException(409, "Purchase order has no matching approval snapshot")
     by_id = {str(i.id): i for i in items}
     validate_receipt(body.items, by_id)
-
-    # Parent helper validates/locks product then warehouse level; deterministic product
-    # order prevents deadlocks between receipts for different POs sharing products.
-    from services.inventory.stock import locked_level
-    levels = {}
-    for product_id in sorted({by_id[str(i.po_item_id)].product_id for i in body.items}, key=str):
-        levels[product_id] = await locked_level(db, tenant_id, product_id, po.warehouse_id)
     # Serial numbers / MAC addresses are validated before anything is written, so a bad scan leaves stock untouched.
     cleaned_units = {}
     for item in body.items:
@@ -782,6 +775,13 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
         status="accepted", received_by=user_id, received_at=now,
         supplier_delivery_note=body.supplier_delivery_note, supplier_invoice_number=body.supplier_invoice_number,
         notes=body.notes)
+    # Parent helper validates/locks product then warehouse level; deterministic product
+    # order prevents deadlocks between receipts for different POs sharing products.
+    from services.inventory.stock import locked_level
+    levels = {}
+    for product_id in sorted({by_id[str(i.po_item_id)].product_id for i in body.items}, key=str):
+        levels[product_id] = await locked_level(db, tenant_id, product_id, po.warehouse_id)
+
     db.add(gr)
     await db.flush()
     accepted_value = Decimal("0.00")
@@ -824,6 +824,11 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
     await db.commit()
     try:
         await finance_outbox.deliver(tenant_id, user_id)
+    from services.inventory import asset_register
+    for item in body.items:         # company assets are carried as equipment from the day they arrive
+        line = by_id[str(item.po_item_id)]
+        await asset_register.capitalise(db, tenant_id, line.product_id, item.quantity_received - item.quantity_rejected,
+                                        line.unit_cost_zar, now.date(), "receipt", gr.gr_number)
     except Exception:
         logger.exception("Finance outbox delivery deferred for receipt %s", gr.id)
     return gr

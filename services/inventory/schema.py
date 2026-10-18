@@ -287,7 +287,7 @@ END $$"""))
     ])
     s += _add_columns("inventory_suppliers", [("spend_limit", "NUMERIC(14,2)"), ("account_number", "VARCHAR(60)")])
     s += _add_columns("catalogue_products", [("inventory_product_id", "UUID")])
-    s += _add_columns("catalogue_assets", [("purpose", "VARCHAR(20)"), ("text", "TEXT")])
+    s += _add_columns("catalogue_assets", [("purpose", "VARCHAR(20)"), ("text", "TEXT"), ("title", "VARCHAR(160)")])
     return s
 
 

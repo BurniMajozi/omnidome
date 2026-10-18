@@ -72,7 +72,7 @@ export function StepLaunch({ form, setDef, preview, notify }: StepProps) {
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">Launch route, testing and ICASA lodgment</h3>
+        <h3 className="text-sm font-semibold text-foreground">Launch route, testing and regulation</h3>
         <p className="mt-1 text-xs text-muted-foreground">Choose how this product goes to market. Anything you skip needs a recorded reason; anything you keep becomes a gate on the Launch button, enforced by the server.</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Launch route">

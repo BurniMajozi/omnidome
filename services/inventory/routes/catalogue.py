@@ -7,7 +7,7 @@ Launch button is a convenience, not the control.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
@@ -19,7 +19,9 @@ from sqlalchemy import delete, func, select
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id, get_current_user_id
 from services.inventory import catalogue_rules as rules
+from services.inventory import asset_register as assets
 from services.inventory import catalogue_docs as docs
+from services.inventory import finance_outbox
 from services.inventory import catalogue_stock as stock
 from services.inventory.access import require_access, require_tier
 from services.inventory.catalogue_models import (CatalogueAsset, CatalogueEvent, CatalogueList, CatalogueProduct,
@@ -89,6 +91,7 @@ class Asset(_Loose):
     """Metadata only. Binary upload/storage is a separate service; ``url`` points at stored content."""
     id: str
     name: str
+    title: str = Field("", max_length=160)          # user-given name (internal certificates)
     kind: str = "Document"
     extension: str = ""
     size: int = 0
@@ -797,7 +800,8 @@ def _sniff_ok(ext: str, data: bytes) -> bool:
 
 
 @router.post("/products/{product_id}/assets", status_code=201, dependencies=[Depends(require_tier("write"))])
-async def upload_asset(product_id: uuid.UUID, request: Request, filename: str, purpose: Optional[Literal["fact_sheet"]] = None,
+async def upload_asset(product_id: uuid.UUID, request: Request, filename: str, purpose: Optional[Literal["fact_sheet", "certificate"]] = None,
+                       title: Optional[str] = Query(None, max_length=160),
                        tenant_id: uuid.UUID = Depends(get_current_tenant_id),
                        user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
     """Raw-body upload (Content-Length bounded) so no multipart dependency is needed: POST bytes with ?filename=."""
@@ -824,20 +828,40 @@ async def upload_asset(product_id: uuid.UUID, request: Request, filename: str, p
         raise HTTPException(409, f"A product can hold at most {MAX_ASSETS_PER_PRODUCT} files")
     kind = "3D" if ext in MODEL_TYPES else "Image" if ext in IMAGE_TYPES else "Document"
     text = None
-    if purpose == "fact_sheet":
+    title = (title or "").strip() or None
+    if purpose == "certificate" and not title:
+        raise HTTPException(422, "Give the certificate a name")
+    if purpose in ("fact_sheet", "certificate"):
         if ext not in ("pdf", "docx", "txt"):
-            raise HTTPException(415, "A fact sheet must be a PDF, DOCX or TXT file")
+            raise HTTPException(415, ("A certificate" if purpose == "certificate" else "A fact sheet") + " must be a PDF, DOCX or TXT file")
         try:
             text = docs.extract_text(ext, data)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
     a = CatalogueAsset(tenant_id=tenant_id, product_id=product_id, filename=clean, content_type=ALLOWED_TYPES[ext], size=len(data), data=data,
-                       purpose=purpose, text=text)
+                       purpose=purpose, text=text, title=title if purpose == "certificate" else None)
     db.add(a)
     await db.flush()
     await _log(db, tenant_id, product_id, "asset_added", user_id, {"filename": clean, "size": len(data), "purpose": purpose})
-    return {"id": str(a.id), "name": clean, "kind": kind, "extension": ext, "size": len(data),
+    return {"id": str(a.id), "name": clean, "title": a.title, "kind": kind, "extension": ext, "size": len(data),
             "url": f"/svc/inventory/catalogue/assets/{a.id}", "text_chars": len(text) if text else None}
+
+
+class RenameIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=160)
+
+
+@router.patch("/products/{product_id}/assets/{asset_id}", dependencies=[Depends(require_tier("write"))])
+async def rename_asset(product_id: uuid.UUID, asset_id: uuid.UUID, body: RenameIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                       user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
+    """Rename an internal certificate. The new name is what the knowledge base indexes it under."""
+    a = (await db.execute(select(CatalogueAsset).where(CatalogueAsset.id == asset_id, CatalogueAsset.product_id == product_id,
+                                                       CatalogueAsset.tenant_id == tenant_id))).scalar_one_or_none()
+    if a is None or a.purpose != "certificate":
+        raise HTTPException(404, "Certificate not found")
+    a.title = body.title.strip()
+    await _log(db, tenant_id, product_id, "asset_renamed", user_id, {"asset": str(a.id), "title": a.title})
+    return {"id": str(a.id), "title": a.title}
 
 
 @router.get("/assets/{asset_id}")
@@ -1014,3 +1038,52 @@ async def unit_register(product_id: Optional[uuid.UUID] = None, serial: Optional
     rows = (await db.execute(q.order_by(InventoryUnit.created_at.desc()).limit(limit))).scalars()
     return [{"id": str(u.id), "product_id": str(u.product_id), "serial": u.serial, "mac": u.mac, "status": u.status,
              "gr_id": str(u.gr_id) if u.gr_id else None, "created_at": u.created_at} for u in rows]
+
+
+# ── equipment register (company assets and given-away items) ─────────────────
+
+@router.get("/assets", dependencies=[Depends(require_tier("write"))])
+async def list_assets(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    from services.inventory.catalogue_models import InventoryAsset
+    rows = (await db.execute(select(InventoryAsset).where(InventoryAsset.tenant_id == tenant_id)
+                             .order_by(InventoryAsset.in_service.desc()).limit(500))).scalars().all()
+    names = {r.id: (r.product_number, r.name) for r in await _all(db, tenant_id)}
+    out = []
+    for b in rows:
+        cost = Decimal(str(b.unit_cost)) * b.quantity
+        out.append({"id": str(b.id), "product_id": str(b.catalogue_product_id) if b.catalogue_product_id else None,
+                    "product_number": names.get(b.catalogue_product_id, ("", ""))[0], "name": names.get(b.catalogue_product_id, ("", ""))[1],
+                    "origin": b.origin, "reference": b.reference, "quantity": b.quantity, "unit_cost": float(b.unit_cost), "life_months": b.life_months,
+                    "residual": float(b.residual), "in_service": b.in_service.isoformat(), "depreciated_months": b.depreciated_months,
+                    "accumulated": float(b.accumulated), "net_book_value": float(cost - Decimal(str(b.accumulated))), "monthly": float(assets.monthly_charge(b)),
+                    "status": b.status})
+    return out
+
+
+@router.post("/assets/run-depreciation", dependencies=[Depends(require_tier("manager"))])
+async def run_asset_depreciation(as_of: Optional[date] = None, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                 user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
+    """Post any month-end depreciation that is due (also runs on its own every few hours). Safe to repeat."""
+    result = await assets.run_depreciation(db, tenant_id, as_of)
+    await db.commit()
+    await finance_outbox.deliver_quietly(tenant_id, user_id)
+    return result
+
+
+class DisposeIn(BaseModel):
+    quantity: int = Field(1, ge=1, le=100000)
+    reason: str = Field(..., min_length=3, max_length=160)
+
+
+@router.post("/assets/{batch_id}/dispose", dependencies=[Depends(require_tier("manager"))])
+async def dispose_asset(batch_id: uuid.UUID, body: DisposeIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                        user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
+    try:
+        result = await assets.dispose(db, tenant_id, batch_id, body.quantity, date.today(), body.reason.strip())
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    await db.commit()
+    await finance_outbox.deliver_quietly(tenant_id, user_id)
+    return result

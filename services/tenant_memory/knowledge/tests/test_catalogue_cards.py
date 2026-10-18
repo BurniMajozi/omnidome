@@ -199,3 +199,12 @@ def test_not_sold_products_say_so_without_amortisation_or_rent():
     assert "not sold: given to the customer and returned when they leave" in md
     for forbidden in ("36", "120", "99", "amortis"):
         assert forbidden not in md, forbidden
+
+
+def test_certificate_card_uses_the_name_the_user_gave():
+    row = {"id": "c1", "product_id": FIBRE, "product_number": "OD-000201", "product_name": "AX1800 Wi-Fi router", "filename": "scan0042.pdf",
+           "purpose": "certificate", "title": "ICASA type approval", "text": "Type approval TA-2026-1234 issued for the AX1800."}
+    c = BC.catalogue_factsheet_card(row, NOW)
+    assert c.title.startswith("Internal certificate: ICASA type approval") and "scan0042" not in c.title
+    assert "certificate" in c.tags and "TA-2026-1234" in c.markdown
+    assert BC.catalogue_factsheet_card({**row, "purpose": "fact_sheet", "title": None}, NOW).title.startswith("Fact sheet: scan0042.pdf")
