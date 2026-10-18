@@ -16,7 +16,10 @@ from services.tenant_memory.knowledge.cards.builders_ext import jsonish
 # worker imports sources_ext first, so a module-level import here is circular and crash-loops the indexer.
 
 _COLS = ("t.product_number, t.name, t.category, t.range, t.family, t.nature, t.usage, t.status, t.owner, "
-         "t.launched_at, (t.definition - 'costs' - 'supplier') AS definition")
+         "t.launched_at, (t.definition - 'costs' - 'supplier' - 'sources') AS definition, "
+         # supplier ids and the preferred flag only: unit costs inside `sources` are never selected
+         "(SELECT jsonb_agg(jsonb_build_object('supplier_id', s->>'supplier_id', 'preferred', COALESCE((s->>'preferred')::boolean, false))) "
+         "FROM jsonb_array_elements(COALESCE(t.definition->'sources', '[]'::jsonb)) s) AS source_refs")
 
 
 async def fetch_catalogue(session, tenant: str, wm: Optional[dict], limit: int) -> S.Page:
@@ -33,6 +36,12 @@ async def fetch_catalogue(session, tenant: str, wm: Optional[dict], limit: int) 
     for r in rows:
         for c in (jsonish(r.get("definition")) or {}).get("components") or []:
             wanted.add(str(c.get("product_id")))
+    supplier_ids = sorted({str(x.get("supplier_id")) for r in rows for x in (jsonish(r.get("source_refs")) or [])})
+    supplier_names: dict[str, str] = {}
+    if supplier_ids and await table_exists(session, "inventory_suppliers"):
+        for sp in await S._rows(session, "SELECT id::text AS id, name FROM inventory_suppliers WHERE tenant_id = CAST(:t AS uuid) "
+                                         "AND deleted_at IS NULL AND id::text = ANY(CAST(:ids AS text[]))", {"t": tenant, "ids": supplier_ids}):
+            supplier_names[sp["id"]] = sp["name"]
     names: dict[str, tuple[str, str]] = {}
     if wanted:
         for n in await S._rows(session, "SELECT id::text AS id, product_number, name FROM catalogue_products "
@@ -40,7 +49,7 @@ async def fetch_catalogue(session, tenant: str, wm: Optional[dict], limit: int) 
                                {"t": tenant, "ids": sorted(wanted)}):
             names[n["id"]] = (n["product_number"], n["name"])
     for r in rows:
-        page.cards.append(BC.catalogue_product_card({**r, "id": r["id"]}, names, S._utc(r["ts"])))
+        page.cards.append(BC.catalogue_product_card({**r, "id": r["id"]}, names, S._utc(r["ts"]), supplier_names))
     return page
 
 

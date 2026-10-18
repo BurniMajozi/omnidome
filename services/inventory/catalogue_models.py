@@ -8,7 +8,7 @@ Portable column types keep the API testable on SQLite while using JSONB/UUID on 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, JSON, LargeBinary, String, UniqueConstraint, Uuid, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, LargeBinary, String, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +41,8 @@ class CatalogueProduct(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     launched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The stock item (inventory_products.id) this catalogue product is bought, held and issued as.
+    inventory_product_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -93,4 +95,43 @@ class CatalogueAsset(Base):
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SupplierReturn(Base):
+    """Stock returned to a supplier (fault, wrong item, damage after receipt). Feeds the supplier scorecard."""
+    __tablename__ = "inventory_supplier_returns"
+    __table_args__ = (Index("ix_supplier_returns_supplier", "tenant_id", "supplier_id", "returned_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)      # inventory_products.id
+    warehouse_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    po_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    gr_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="returned")   # returned | credited
+    credit_note_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    stock_adjusted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    returned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SupplierEvaluation(Base):
+    """The receiver's rating of one delivery (goods receipt). One per receipt."""
+    __tablename__ = "inventory_supplier_evaluations"
+    __table_args__ = (UniqueConstraint("tenant_id", "gr_id", name="uq_supplier_eval_gr"),
+                      Index("ix_supplier_eval_supplier", "tenant_id", "supplier_id"))
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    gr_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    po_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)            # 1 (poor) .. 5 (excellent)
+    late_reason: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    comment: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    evaluated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

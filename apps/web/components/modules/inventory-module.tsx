@@ -6,6 +6,7 @@ import { Package, Warehouse, Truck, AlertTriangle } from "lucide-react"
 import { PurchasingSection } from "./purchasing-section"
 import { FieldTechVanStockView } from "./inventory/field-tech-van-stock"
 import { InventoryReports } from "./inventory/inventory-reports"
+import { StockSupplierPerformance } from "./suppliers/stock-supplier-performance"
 import { useLoadable } from "@/lib/service-fetch"
 import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
@@ -165,6 +166,7 @@ export function InventoryModule() {
                     <PurchasingSection />
                 )}
             </div>
+            {!serviceDown && <div className="mt-6"><StockSupplierPerformance /></div>}
 
             <div className="mt-8 pt-6 border-t border-border/50">
                 <FieldTechVanStockView />

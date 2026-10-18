@@ -409,7 +409,8 @@ class Supplier(Base, SoftDeleteMixin):
     email: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(30))
     address: Mapped[Optional[str]] = mapped_column(Text)
-    tax_id: Mapped[Optional[str]] = mapped_column(String(50))
+    tax_id: Mapped[Optional[str]] = mapped_column(String(50))   # the supplier's VAT number
+    account_number: Mapped[Optional[str]] = mapped_column(String(60))   # our account number with this supplier
     payment_terms: Mapped[Optional[str]] = mapped_column(String(100))  # "Net 30", "Net 60"
     lead_time_days: Mapped[int] = mapped_column(Integer, default=7)
     # Optional per-PO spend ceiling (ZAR, incl. VAT). NULL = no limit. Enforced when a PO is submitted.

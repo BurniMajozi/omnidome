@@ -33,6 +33,8 @@ import { MarketWatchView } from "./products/market-watch-view"
 import { listPlans, type Plan } from "@/lib/products-api"
 import { listProducts, type Product as CatalogueProduct } from "@/lib/catalogue-api"
 import { CatalogueTab } from "./products/catalogue/catalogue-tab"
+import { ProfitabilityPanel } from "./products/profitability-panel"
+import { SuppliersTab } from "./suppliers/suppliers-tab"
 
 const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
 
@@ -167,10 +169,12 @@ export function ProductsModule() {
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="pricing">Pricing</TabsTrigger>
             <TabsTrigger value="catalogue">Catalogue</TabsTrigger>
+            <TabsTrigger value="suppliers">Suppliers</TabsTrigger>
           </TabsList>
         </div>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
+          <ProfitabilityPanel />
           <Card className="border-border bg-card">
             <CardHeader>
               <CardTitle className="text-base">Product Mix</CardTitle>
@@ -257,6 +261,10 @@ export function ProductsModule() {
 
         <TabsContent value="catalogue" className="mt-4">
           <CatalogueTab onCatalogueChanged={setCatalogue} />
+        </TabsContent>
+
+        <TabsContent value="suppliers" className="mt-4">
+          <SuppliersTab />
         </TabsContent>
       </Tabs>
     </div>

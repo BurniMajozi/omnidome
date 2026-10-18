@@ -181,6 +181,10 @@ def launch_checks(p: dict, catalogue: dict[str, dict]) -> list[dict]:
     add("components", "Included products are launched and valid", not bad_comp,
         "Not launched or invalid: " + ", ".join(bad_comp) if bad_comp else "")
 
+    if p.get("nature") == "Physical item" and (d.get("stock") or "None") != "None":
+        has = any(s.get("preferred") for s in d.get("sources") or [])
+        add("sourcing", "A supplier is set for this stock item", has,
+            "" if has else "Add at least one supplier source (in Sourcing & costs) so stock can buy it")
     if r.get("tests_required", True):
         tests = r.get("tests") or []
         plan = standard_tests(p.get("nature") or "")

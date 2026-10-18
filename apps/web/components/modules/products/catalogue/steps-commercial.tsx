@@ -10,46 +10,6 @@ import type { StepProps } from "./wizard-types"
 
 const iconBtn = "h-9 w-9 shrink-0 p-0"
 
-// ── Step 2: sourcing and costs ───────────────────────────────────────────────
-
-export function StepSourcing({ form, setDef, preview }: StepProps) {
-  const d = form.definition
-  const upd = (i: number, patch: Partial<(typeof d.costs)[number]>) => setDef({ costs: d.costs.map((c, k) => (k === i ? { ...c, ...patch } : c)) })
-  const e = preview?.economics
-  return (
-    <div className="space-y-5">
-      <div>
-        <h3 className="text-sm font-semibold text-foreground">Build the cost sheet</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Add every direct cost. Monthly and once-off costs stay separate. Amounts are per unit, in ZAR excluding tax. A missing cost is never treated as zero.</p>
-      </div>
-      <Field label="Preferred supplier"><Input value={d.supplier} onChange={(ev) => setDef({ supplier: ev.target.value })} className="h-9 text-xs" /></Field>
-      <div className="space-y-2">
-        {d.costs.length === 0 && <p className="text-xs text-amber-400">No direct costs captured. Profitability is incomplete.</p>}
-        {d.costs.map((c, i) => (
-          <div key={i} className="grid items-end gap-2 sm:grid-cols-[1.4fr_1fr_110px_120px_36px]">
-            <Field label="Cost component"><Input value={c.name} onChange={(ev) => upd(i, { name: ev.target.value })} className="h-9 text-xs" /></Field>
-            <Field label="Source"><Input value={c.supplier} onChange={(ev) => upd(i, { supplier: ev.target.value })} className="h-9 text-xs" /></Field>
-            <Field label="Amount (R)"><Input type="number" min={0} step="0.01" value={c.amount} onChange={(ev) => upd(i, { amount: ev.target.value })} className="h-9 text-xs" /></Field>
-            <Field label="Cadence">
-              <select value={c.cadence} className={selectCls} onChange={(ev) => upd(i, { cadence: ev.target.value as "Monthly" | "Once-off" })}><option>Monthly</option><option>Once-off</option></select>
-            </Field>
-            <Button type="button" variant="outline" size="sm" className={`${iconBtn} hover:border-red-500/60 hover:text-red-400`} aria-label={`Remove cost line ${i + 1}`} onClick={() => setDef({ costs: d.costs.filter((_, k) => k !== i) })}><Trash2 className="h-3.5 w-3.5" /></Button>
-          </div>
-        ))}
-      </div>
-      <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => setDef({ costs: [...d.costs, { name: "", supplier: d.supplier || "Internal", amount: 0, cadence: d.recurring ? "Monthly" : "Once-off" }] })}><Plus className="h-3.5 w-3.5" /> Add cost line</Button>
-      {e && (
-        <div className="rounded-lg border border-border bg-card/60 p-3 text-xs">
-          <div className="flex justify-between"><span className="text-muted-foreground">Recurring direct cost</span><strong>{money(e.monthly)}/mo</strong></div>
-          <div className="mt-1 flex justify-between"><span className="text-muted-foreground">Upfront direct cost (includes inclusions)</span><strong>{money(e.upfront)}</strong></div>
-          {!e.complete && <p className="mt-2 text-amber-400">Incomplete cost sheet: margin is not shown until every cost is captured.</p>}
-        </div>
-      )}
-      <p className="text-[11px] text-muted-foreground">Alternative supplier quotes are separate scenarios, never added together. Cost changes after launch create dated revisions.</p>
-    </div>
-  )
-}
-
 // ── Step 3: included products (from the catalogue) ───────────────────────────
 
 function reaches(from: string, target: string, byId: Map<string, Product>, seen = new Set<string>()): boolean {

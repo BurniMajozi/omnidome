@@ -17,6 +17,7 @@ from sqlalchemy import delete, func, select
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id, get_current_user_id
 from services.inventory import catalogue_rules as rules
+from services.inventory import catalogue_stock as stock
 from services.inventory.access import require_access, require_tier
 from services.inventory.catalogue_models import (CatalogueAsset, CatalogueEvent, CatalogueList, CatalogueProduct,
                                                  CatalogueReservedNumber)
@@ -39,8 +40,22 @@ class _Loose(BaseModel):
 class Cost(_Loose):
     name: str = ""
     supplier: str = ""
+    supplier_id: Optional[str] = None
     amount: Decimal = Decimal(0)
     cadence: Literal["Monthly", "Once-off"] = "Monthly"
+    auto: bool = False        # maintained by the server from the preferred supplier source
+
+
+class Source(_Loose):
+    """One supplier this product can be bought from."""
+    supplier_id: uuid.UUID
+    supplier_sku: str = Field("", max_length=80)
+    unit_cost: Decimal = Field(Decimal(0), ge=0, max_digits=12, decimal_places=2)
+    cadence: Literal["Monthly", "Once-off"] = "Once-off"     # monthly for services such as wholesale access
+    lead_time_days: Optional[int] = Field(None, ge=0, le=365)
+    moq: Optional[int] = Field(None, ge=1, le=1_000_000)
+    preferred: bool = False
+    notes: str = Field("", max_length=300)
 
 
 class Component(_Loose):
@@ -170,6 +185,7 @@ class Definition(_Loose):
     term: int = Field(24, ge=1, le=120)
     launch_date: Optional[str] = None
     costs: list[Cost] = []
+    sources: list[Source] = Field([], max_length=20)
     components: list[Component] = []
     fees: list[Fee] = []
     media: list[Asset] = []
@@ -244,6 +260,7 @@ def _serialise(p: CatalogueProduct, catalogue: dict[str, dict], costs_visible: b
     e = rules.economics(v["id"], catalogue)
     checks = rules.launch_checks(v, catalogue)
     out = {**v, "created_at": p.created_at, "updated_at": p.updated_at, "launched_at": p.launched_at,
+           "inventory_product_id": str(p.inventory_product_id) if p.inventory_product_id else None,
            "checks": checks, "ready_to_launch": all(c["ok"] for c in checks) and p.status not in ("active", "archived"),
            "cost_complete": e["complete"]}
     if costs_visible:
@@ -335,6 +352,15 @@ async def _ensure_lists(db, tenant_id: uuid.UUID) -> None:
         db.add(CatalogueList(tenant_id=tenant_id, kind="family", name=f, parent="", position=pos))
         pos += 1
     await db.flush()
+
+
+async def _normalise_definition_sources(db, tenant_id: uuid.UUID, definition: dict, strict: bool = True) -> None:
+    """Validate the supplier sources against the supplier master and keep the automatic cost line in step."""
+    ids = {str(s["supplier_id"]) for s in definition.get("sources") or []}
+    names = await stock.supplier_names(db, tenant_id, ids)
+    problems = stock.normalise_sources(definition, names)
+    if problems and strict:
+        raise HTTPException(422, "; ".join(sorted(set(problems))))
 
 
 # ── managed lists ────────────────────────────────────────────────────────────
@@ -459,6 +485,7 @@ async def create_product(body: ProductIn, tenant_id: uuid.UUID = Depends(get_cur
                          user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
     await _validate_lists(db, tenant_id, body.category, body.range, body.family)
     definition = body.definition.model_dump(mode="json")
+    await _normalise_definition_sources(db, tenant_id, definition)
     rows = await _all(db, tenant_id)
     catalogue = _catalogue_map(rows)
     await _check_components(db, tenant_id, None, definition, catalogue)
@@ -498,6 +525,8 @@ async def update_product(product_id: uuid.UUID, body: ProductPatch, tenant_id: u
         raise HTTPException(409, "Archived products cannot be edited")
     changes = body.model_dump(exclude_unset=True, exclude={"expected_revision", "submit_for_review"})
     new_def = body.definition.model_dump(mode="json") if body.definition is not None else None
+    if new_def is not None:
+        await _normalise_definition_sources(db, tenant_id, new_def)
     active = p.status == "active"
     if active:
         locked = [c for c in rules.ACTIVE_LOCKED_COLUMNS if c in changes and changes[c] != getattr(p, c)]
@@ -564,6 +593,7 @@ async def launch_product(product_id: uuid.UUID, body: RevisionBody, tenant_id: u
     p.launched_at = datetime.now(timezone.utc)
     p.revision += 1
     await db.flush()
+    await stock.ensure_stock_item(db, tenant_id, p)          # physical + tracked: becomes a purchasable stock item
     r = (p.definition or {}).get("readiness") or {}
     await _log(db, tenant_id, p.id, "launched", user_id, {
         "effective": effective, "tests": len(r.get("tests") or []), "tests_required": r.get("tests_required", True),
@@ -603,6 +633,7 @@ async def archive_product(product_id: uuid.UUID, body: RevisionBody, tenant_id: 
     deps = rules.referenced_by(str(p.id), [_view(r) for r in await _all(db, tenant_id)])
     if deps:
         raise HTTPException(409, {"message": "Other products include this one. Resolve them first.", "products": [d["name"] for d in deps]})
+    await stock.deactivate_stock_item(db, tenant_id, p)
     p.status, p.archived_at = "archived", datetime.now(timezone.utc)
     p.revision += 1
     await _log(db, tenant_id, p.id, "archived", user_id)
@@ -644,8 +675,10 @@ async def preview(body: ProductIn, product_id: Optional[uuid.UUID] = None, tenan
     catalogue = _catalogue_map(await _all(db, tenant_id))
     pid = str(product_id) if product_id else "draft"
     status = catalogue[pid]["status"] if pid in catalogue else "draft"
+    definition = body.definition.model_dump(mode="json")
+    await _normalise_definition_sources(db, tenant_id, definition, strict=False)
     view = {"id": pid, "name": body.name, "category": body.category, "range": body.range, "family": body.family,
-            "nature": body.nature, "usage": body.usage, "status": status, "definition": body.definition.model_dump(mode="json")}
+            "nature": body.nature, "usage": body.usage, "status": status, "definition": definition}
     checks = rules.launch_checks(view, {**catalogue, pid: view})
     out = {"checks": checks, "ready_to_launch": all(c["ok"] for c in checks) and status in ("draft", "in_review")}
     if await _can_see_costs(auth):
@@ -742,3 +775,39 @@ async def delete_asset(asset_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_c
     await _log(db, tenant_id, a.product_id, "asset_removed", user_id, {"filename": a.filename})
     await db.delete(a)
     return {"deleted": True}
+
+
+# ── stock link: what purchasing can buy ──────────────────────────────────────
+
+@router.post("/products/{product_id}/stock-link", dependencies=[Depends(require_tier("write"))])
+async def link_to_stock(product_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    """Create (or refresh) the stock item for an active physical product with stock tracking. Idempotent."""
+    p = await _get(db, tenant_id, product_id)
+    if p.status != "active":
+        raise HTTPException(409, "Launch the product before it can be bought as stock")
+    if not stock.is_stockable(p.nature, p.definition or {}):
+        raise HTTPException(409, "Only physical items with a stock tracking mode (quantity, serial or batch) are held as stock")
+    item_id = await stock.ensure_stock_item(db, tenant_id, p)
+    return {"inventory_product_id": str(item_id), "product_number": p.product_number}
+
+
+@router.get("/purchasable-products")
+async def purchasable_products(supplier_id: Optional[uuid.UUID] = None, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                               db=Depends(get_session)):
+    """Active, stock-tracked catalogue products the buyer can order, each with its supplier sources.
+
+    With ``supplier_id`` the product's price and lead time from that supplier are returned as ``offer`` (null when the
+    supplier is not a listed source: the buyer sees the product but is told it is not sourced from them)."""
+    rows = [r for r in await _all(db, tenant_id) if r.status == "active" and stock.is_stockable(r.nature, r.definition or {})]
+    names = await stock.supplier_names(db, tenant_id, {str(s["supplier_id"]) for r in rows for s in (r.definition or {}).get("sources") or []})
+    out = []
+    for r in sorted(rows, key=lambda x: x.product_number):
+        if not r.inventory_product_id:
+            await stock.ensure_stock_item(db, tenant_id, r)      # launched before the link existed
+        sources = [{**s, "supplier_name": names.get(str(s["supplier_id"]), "")} for s in (r.definition or {}).get("sources") or []]
+        offer = next((s for s in sources if supplier_id and str(s["supplier_id"]) == str(supplier_id)), None)
+        out.append({"catalogue_product_id": str(r.id), "inventory_product_id": str(r.inventory_product_id) if r.inventory_product_id else None,
+                    "product_number": r.product_number, "name": r.name, "unit": (r.definition or {}).get("unit", "Each"),
+                    "stock": (r.definition or {}).get("stock"), "sources": sources, "offer": offer,
+                    "preferred": next((s for s in sources if s.get("preferred")), None)})
+    return [x for x in out if x["inventory_product_id"]]

@@ -26,12 +26,10 @@ import { PoPaymentsDialog, SupplierBankDialog } from "./purchasing-payments"
 import {
   type PurchaseOrder as BasePurchaseOrder,
   type Supplier,
-  type PurchaseOrderItemInput,
-  listPurchaseOrders,
   listSuppliers,
-  createSupplier,
-  createPurchaseOrder,
 } from "@/lib/inventory-api"
+import { inventoryCall } from "@/lib/catalogue-api"
+import { evaluateDelivery, getPurchasable, type PurchasableProduct } from "@/lib/supplier-api"
 
 type PurchaseOrder = Omit<BasePurchaseOrder, "status"> & {
   status: BasePurchaseOrder["status"] | "pending_approval" | "rejected" | "sent"
@@ -64,12 +62,15 @@ function formatZar(value: string) {
 }
 
 interface LineDraft {
-  product_id: string
+  product_id: string        // stock item id, chosen from the products created in Product Management
   quantity_ordered: string
   unit_cost_zar: string
 }
 
 const emptyLine = (): LineDraft => ({ product_id: "", quantity_ordered: "1", unit_cost_zar: "0.00" })
+
+interface WarehouseLite { id: string; name: string }
+interface RateTarget { grId: string; poNumber: string; supplier: string; expected: string | null }
 
 /**
  * Live procure-to-receive UI against the inventory service's purchasing
@@ -83,7 +84,14 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [createOpen, setCreateOpen] = useState(false)
-  const [newSupplierOpen, setNewSupplierOpen] = useState(false)
+  const [catalogue, setCatalogue] = useState<PurchasableProduct[]>([])        // everything stock can buy (names for receiving)
+  const [offers, setOffers] = useState<PurchasableProduct[]>([])              // the same list priced for the chosen supplier
+  const [warehouses, setWarehouses] = useState<WarehouseLite[]>([])
+  const [expectedDelivery, setExpectedDelivery] = useState("")
+  const [rateTarget, setRateTarget] = useState<RateTarget | null>(null)
+  const [rating, setRating] = useState(0)
+  const [ratingLate, setRatingLate] = useState("")
+  const [ratingComment, setRatingComment] = useState("")
   const [receiveTarget, setReceiveTarget] = useState<PurchaseOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState("")
@@ -101,10 +109,9 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
   const [warehouseId, setWarehouseId] = useState("")
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
 
-  const [newSupplierCode, setNewSupplierCode] = useState("")
-  const [newSupplierName, setNewSupplierName] = useState("")
-
   const [receiveQty, setReceiveQty] = useState<Record<string, string>>({})
+  const [rejectQty, setRejectQty] = useState<Record<string, string>>({})
+  const [rejectReason, setRejectReason] = useState<Record<string, string>>({})
 
   async function refresh() {
     setLoading(true)
@@ -114,6 +121,8 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
       const [poList, supplierList] = await Promise.all([purchasingRequest<PurchaseOrder[]>("/purchase-orders"), listSuppliers()])
       setPos(approvalOnly ? poList.filter(p => ["submitted", "pending_approval"].includes(p.status)) : poList)
       setSuppliers(supplierList)
+      getPurchasable().then(setCatalogue).catch(() => setCatalogue([]))
+      inventoryCall<WarehouseLite[]>("/warehouses").then(setWarehouses).catch(() => setWarehouses([]))
     } catch(cause) {setError(cause instanceof Error ? cause.message : "Purchase orders could not be loaded"); setPos([])}
     finally {setLoading(false)}
   }
@@ -125,9 +134,24 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
       .catch((cause) => setError(String(cause.message || cause)))
   }, [approvalOnly])
 
+  useEffect(() => {
+    setOffers([])
+    if (supplierId) getPurchasable(supplierId).then(setOffers).catch(() => setOffers([]))
+  }, [supplierId])
+
+  function pickProduct(i: number, productId: string) {
+    const p = offers.find((x) => x.inventory_product_id === productId)
+    const cost = p?.offer?.unit_cost ?? p?.preferred?.unit_cost ?? "0.00"
+    const next = [...lines]
+    next[i] = { ...next[i], product_id: productId, unit_cost_zar: String(cost), quantity_ordered: next[i].quantity_ordered === "1" && p?.offer?.moq ? String(p.offer.moq) : next[i].quantity_ordered }
+    setLines(next)
+    const lead = p?.offer?.lead_time_days ?? suppliers.find((s) => s.id === supplierId)?.lead_time_days
+    if (!expectedDelivery && lead != null) setExpectedDelivery(new Date(Date.now() + lead * 86400000).toISOString().slice(0, 10))
+  }
+
   async function handleCreatePo() {
     if (!supplierId || !warehouseId) return
-    const items: PurchaseOrderItemInput[] = lines
+    const items = lines
       .filter((l) => l.product_id)
       .map((l) => ({
         product_id: l.product_id,
@@ -135,25 +159,16 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
         unit_cost_zar: l.unit_cost_zar || "0",
       }))
     if (items.length === 0) return
-    const created = await createPurchaseOrder({ supplier_id: supplierId, warehouse_id: warehouseId, items })
-    if (created) {
+    setError("")
+    try {
+      await purchasingRequest("/purchase-orders", "POST", { supplier_id: supplierId, warehouse_id: warehouseId, expected_delivery: expectedDelivery || null, items })
       setCreateOpen(false)
       setLines([emptyLine()])
       setSupplierId("")
       setWarehouseId("")
+      setExpectedDelivery("")
       await refresh()
-    }
-  }
-
-  async function handleCreateSupplier() {
-    if (!newSupplierCode || !newSupplierName) return
-    const created = await createSupplier({ code: newSupplierCode, name: newSupplierName })
-    if (created) {
-      setNewSupplierOpen(false)
-      setNewSupplierCode("")
-      setNewSupplierName("")
-      await refresh()
-    }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create the purchase order") }
   }
 
   async function handleSubmit(po: PurchaseOrder) {
@@ -202,15 +217,25 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
     if (!receiveTarget) return
     const items = receiveTarget.items
       .filter((i) => Number(receiveQty[i.id] || 0) > 0)
-      .map((i) => ({ po_item_id: i.id, quantity_received: Number(receiveQty[i.id]) }))
+      .map((i) => ({
+        po_item_id: i.id, quantity_received: Number(receiveQty[i.id]),
+        quantity_rejected: Math.min(Number(rejectQty[i.id] || 0), Number(receiveQty[i.id])),
+        rejection_reason: Number(rejectQty[i.id] || 0) > 0 ? (rejectReason[i.id] || "").trim() || null : null,
+      }))
     if (items.length === 0) return
+    if (items.some((i) => i.quantity_rejected > 0 && !i.rejection_reason)) { setError("Give a reason for every rejected quantity."); return }
     setBusyId(receiveTarget.id)
     setError("")
     try {
-      await purchasingRequest(`/purchase-orders/${receiveTarget.id}/goods-receipts`, "POST", { receipt_ref: receiptRef, items })
+      const receipt = await purchasingRequest<{ id: string }>(`/purchase-orders/${receiveTarget.id}/goods-receipts`, "POST", { receipt_ref: receiptRef, items })
+      const target = receiveTarget
       setReceiveTarget(null)
       setReceiveQty({})
+      setRejectQty({})
+      setRejectReason({})
       setReceiptRef("")
+      setRating(0); setRatingLate(""); setRatingComment("")
+      setRateTarget({ grId: receipt.id, poNumber: target.po_number, supplier: supplierName(target.supplier_id), expected: target.expected_delivery ?? null })
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Receipt failed") }
     finally { setBusyId(null) }
@@ -273,13 +298,11 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
           <h4 className="card-title">{approvalOnly ? "Pending purchase approvals" : "Purchase Orders"}</h4>
           <p className="text-sm text-muted-foreground">
             Live procure-to-receive — draft → submit → approve → receive, three-way-matched against the PO.
+            Suppliers and the products you can buy are created in Product Management; stock only orders and receives them.
           </p>
         </div>
         {!approvalOnly && <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={() => setBankOpen(true)}>Supplier bank details</Button>
-          <Button size="sm" variant="outline" onClick={() => setNewSupplierOpen(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> Supplier
-          </Button>
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" /> New Purchase Order
           </Button>
@@ -331,20 +354,31 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
               </Select>
             </div>
             <div>
-              <Label>Warehouse ID</Label>
-              <Input value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} placeholder="warehouse UUID" />
+              <Label>Warehouse</Label>
+              <Select value={warehouseId} onValueChange={setWarehouseId}>
+                <SelectTrigger><SelectValue placeholder={warehouses.length ? "Select warehouse" : "No warehouses yet"} /></SelectTrigger>
+                <SelectContent>{warehouses.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="po-expected">Expected delivery (used to measure on-time delivery)</Label>
+              <Input id="po-expected" type="date" value={expectedDelivery} onChange={(e) => setExpectedDelivery(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>Line items</Label>
               {lines.map((line, i) => (
                 <div key={i} className="grid grid-cols-3 gap-2">
-                  <Input
-                    placeholder="Product UUID"
-                    value={line.product_id}
-                    onChange={(e) => {
-                      const next = [...lines]; next[i] = { ...line, product_id: e.target.value }; setLines(next)
-                    }}
-                  />
+                  <div>
+                    <Select value={line.product_id} onValueChange={(v) => pickProduct(i, v)} disabled={!supplierId}>
+                      <SelectTrigger><SelectValue placeholder={!supplierId ? "Choose a supplier first" : offers.length ? "Select product" : "No stock products yet"} /></SelectTrigger>
+                      <SelectContent>
+                        {offers.map((p) => (
+                          <SelectItem key={p.inventory_product_id} value={p.inventory_product_id}>{p.product_number} · {p.name}{p.offer ? "" : " (not sourced from this supplier)"}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {(() => { const p = offers.find((x) => x.inventory_product_id === line.product_id); return p && !p.offer ? <p className="mt-1 text-[11px] text-amber-500">This supplier is not listed for the product. Add them in Product Management first.</p> : p?.offer?.moq ? <p className="mt-1 text-[11px] text-muted-foreground">Minimum order {p.offer.moq}</p> : null })()}
+                  </div>
                   <Input
                     type="number" placeholder="Qty"
                     value={line.quantity_ordered}
@@ -372,28 +406,6 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
         </DialogContent>
       </Dialog>
 
-      {/* New supplier */}
-      <Dialog open={newSupplierOpen} onOpenChange={setNewSupplierOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>New Supplier</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label>Code</Label>
-              <Input value={newSupplierCode} onChange={(e) => setNewSupplierCode(e.target.value)} placeholder="e.g. huawei" />
-            </div>
-            <div>
-              <Label>Name</Label>
-              <Input value={newSupplierName} onChange={(e) => setNewSupplierName(e.target.value)} placeholder="Supplier name" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={handleCreateSupplier}>Create</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Receive goods */}
       <Dialog open={!!receiveTarget} onOpenChange={(open) => !open && setReceiveTarget(null)}>
         <DialogContent className="max-w-lg">
@@ -406,21 +418,32 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
             {receiveTarget?.items.map((item) => {
               const remaining = item.quantity_ordered - item.quantity_received
               return (
-                <div key={item.id} className="flex items-center justify-between gap-3">
-                  <div className="text-sm">
-                    <div className="font-medium">{item.product_id.slice(0, 8)}…</div>
-                    <div className="text-muted-foreground">
-                      {item.quantity_received}/{item.quantity_ordered} received — {remaining} outstanding
+                <div key={item.id} className="space-y-1.5 rounded-md border border-border/60 p-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm">
+                      <div className="font-medium">{(() => { const p = catalogue.find((c) => c.inventory_product_id === item.product_id); return p ? `${p.product_number} · ${p.name}` : `${item.product_id.slice(0, 8)}…` })()}</div>
+                      <div className="text-muted-foreground">
+                        {item.quantity_received}/{item.quantity_ordered} received — {remaining} outstanding
+                      </div>
                     </div>
+                    <Input
+                      type="number"
+                      className="w-24"
+                      placeholder="Received"
+                      aria-label="Quantity received"
+                      max={remaining}
+                      value={receiveQty[item.id] ?? ""}
+                      onChange={(e) => setReceiveQty({ ...receiveQty, [item.id]: e.target.value })}
+                    />
                   </div>
-                  <Input
-                    type="number"
-                    className="w-28"
-                    placeholder="0"
-                    max={remaining}
-                    value={receiveQty[item.id] ?? ""}
-                    onChange={(e) => setReceiveQty({ ...receiveQty, [item.id]: e.target.value })}
-                  />
+                  {Number(receiveQty[item.id] || 0) > 0 && (
+                    <div className="grid grid-cols-[96px_1fr] gap-2">
+                      <Input type="number" min="0" max={receiveQty[item.id]} placeholder="Rejected" aria-label="Quantity rejected" value={rejectQty[item.id] ?? ""}
+                        onChange={(e) => setRejectQty({ ...rejectQty, [item.id]: e.target.value })} />
+                      <Input placeholder="Reason for rejection (damaged, wrong model…)" aria-label="Rejection reason" disabled={!Number(rejectQty[item.id] || 0)}
+                        value={rejectReason[item.id] ?? ""} onChange={(e) => setRejectReason({ ...rejectReason, [item.id]: e.target.value })} />
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -429,6 +452,32 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
             <Button disabled={!receiptRef.trim() || busyId === receiveTarget?.id} onClick={handleReceive}>Record Receipt</Button>
           </DialogFooter>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        </DialogContent>
+      </Dialog>
+
+      {/* Rate the delivery: feeds the supplier scorecard in Stock and in Product Management */}
+      <Dialog open={!!rateTarget} onOpenChange={(open) => !open && setRateTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Rate this delivery — {rateTarget?.supplier}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Receipt recorded for {rateTarget?.poNumber}. How did {rateTarget?.supplier} do on packaging, accuracy, paperwork and timeliness?</p>
+          <div className="flex gap-1" role="radiogroup" aria-label="Delivery rating">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} type="button" role="radio" aria-checked={rating === n} aria-label={`${n} out of 5`} onClick={() => setRating(n)}
+                className={`h-10 w-10 rounded-md border text-sm font-medium ${rating === n ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}>{n}</button>
+            ))}
+          </div>
+          <div className="space-y-2">
+            <Input placeholder="If it was late, why? (optional)" value={ratingLate} onChange={(e) => setRatingLate(e.target.value)} aria-label="Reason it was late" />
+            <Input placeholder="Comment (optional)" value={ratingComment} onChange={(e) => setRatingComment(e.target.value)} aria-label="Comment" />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRateTarget(null)}>Skip</Button>
+            <Button disabled={!rating} onClick={async () => {
+              if (!rateTarget) return
+              try { await evaluateDelivery(rateTarget.grId, { rating, late_reason: ratingLate, comment: ratingComment }); setRateTarget(null) }
+              catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save the rating") }
+            }}>Save rating</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

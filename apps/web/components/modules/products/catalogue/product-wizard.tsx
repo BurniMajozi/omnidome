@@ -8,12 +8,13 @@ import {
   type Definition, type Lists, type Product,
 } from "@/lib/catalogue-api"
 import { StepDefinition } from "./step-definition"
-import { StepIncluded, StepPricing, StepSourcing } from "./steps-commercial"
+import { StepIncluded, StepPricing } from "./steps-commercial"
+import { StepSourcing } from "./step-sourcing"
 import { StepMedia, StepResearch } from "./steps-content"
 import { StepLaunch, StepReview } from "./steps-launch"
 import { fromProduct, toInput, type Form, type Preview } from "./wizard-types"
 
-const STEPS = ["Definition", "Sourcing & costs", "Included products", "Selling price & fees", "Media & documents", "Research & KPIs", "Testing & ICASA", "Review"]
+const STEPS = ["Definition", "Suppliers & costs", "Included products", "Selling price & fees", "Media & documents", "Research & KPIs", "Testing & ICASA", "Review"]
 
 const blankForm = (): Form => ({
   status: "draft", product_number: "", custom_number: "", name: "", category: "", range: "", family: "",

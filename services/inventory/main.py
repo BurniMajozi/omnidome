@@ -15,6 +15,7 @@ from services.common.background_tasks import schedule_background
 from services.inventory.database import get_session, init_tables, Product, ProductCategory, Warehouse, InventoryLevel, StockMovement
 from services.inventory.routes.purchasing import router as purchasing_router
 from services.inventory.routes.catalogue import router as catalogue_router
+from services.inventory.routes.supplier_perf import router as supplier_perf_router
 from services.inventory.routes.reports import router as reports_router
 from services.inventory.routes.supplier_payments import router as supplier_payments_router
 
@@ -24,6 +25,7 @@ guard = EntitlementGuard(module_id="inventory")
 configure_production(app)
 app.include_router(purchasing_router)
 app.include_router(catalogue_router)
+app.include_router(supplier_perf_router)
 app.include_router(supplier_payments_router)
 app.include_router(reports_router)
 

@@ -15,7 +15,7 @@ from services.tenant_memory.knowledge.cards.builders_ext import _d, _s, _yn, jso
 from services.tenant_memory.knowledge.kdata import IMPORTANCE, Edge
 
 CATALOGUE_FIELDS = ("id", "product_number", "name", "category", "range", "family", "nature", "usage", "status", "owner",
-                    "launched_at", "definition", "updated_at")
+                    "launched_at", "definition", "source_refs", "updated_at")
 LIFECYCLE = {"draft": "Draft (in development)", "in_review": "In review", "active": "Active (launched)", "archived": "Archived"}
 
 
@@ -29,7 +29,8 @@ def _price(d: dict) -> str:
     return f"R{p:,.2f} excluding tax" + (" per month" if d.get("recurring", True) else " once-off")
 
 
-def catalogue_product_card(row: dict, names: dict[str, tuple[str, str]], as_of: Optional[datetime]) -> Card:
+def catalogue_product_card(row: dict, names: dict[str, tuple[str, str]], as_of: Optional[datetime],
+                           supplier_names: Optional[dict[str, str]] = None) -> Card:
     """``names`` maps component product id -> (product_number, name) for readable inclusions."""
     r = pick(row, allowed_fields("catalogue_product", CATALOGUE_FIELDS))
     d = jsonish(r.get("definition")) or {}
@@ -62,6 +63,11 @@ def catalogue_product_card(row: dict, names: dict[str, tuple[str, str]], as_of: 
             num, nm = names.get(cid, ("", "an unavailable product"))
             lines.append(f"- {int(c.get('qty') or 1)} x {_s(nm, 120)}" + (f" ({_s(num, 40)})" if num else "") + " at no customer charge")
             edges.append(Edge("catalogue_product", pid, "catalogue_product", cid, "includes"))
+
+    refs = jsonish(r.get("source_refs")) or []
+    if refs:
+        # Names only. Supplier prices, lead times and performance scores are not part of the product knowledge.
+        lines += ["", "## Suppliers"] + [f"- {_s((supplier_names or {}).get(str(x.get('supplier_id'))) or 'a listed supplier', 100)}" + (" (preferred)" if x.get("preferred") else "") for x in refs]
 
     fees = [f for f in (d.get("fees") or []) if f.get("enabled")]
     if fees:

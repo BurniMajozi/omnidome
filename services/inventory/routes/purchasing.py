@@ -1,5 +1,6 @@
 """Tenant-scoped purchasing lifecycle, signed approval, and atomic stock receipts."""
 import logging
+import re
 import hashlib
 import base64
 import uuid
@@ -8,7 +9,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,7 @@ from services.common.auth import AuthContext, get_auth_context, get_current_tena
 from services.common.http_client import service_get, service_post
 from services.inventory.access import require_access, require_tier
 from services.inventory import finance_outbox
+from services.inventory.catalogue_stock import require_catalogue_products
 from services.inventory.purchasing_helpers import (
     VAT_RATE, money, approval_hash, validate_signature, require_state,
     validate_receipt, matches_receipt, render_purchase_order_pdf,
@@ -52,17 +54,56 @@ async def _product_exists(db: AsyncSession, tenant_id: uuid.UUID, product_id: uu
 
 # ── Schemas ─────────────────────────────────────────────────────────────
 
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_VAT = re.compile(r"^[A-Za-z0-9 -]{5,20}$")
+
+
+def _clean_supplier_fields(v):
+    """Shared validation for create and update (None means 'leave unset')."""
+    if getattr(v, "email", None) and not _EMAIL.match(v.email.strip()):
+        raise ValueError("Enter a valid email address")
+    if getattr(v, "tax_id", None) and not _VAT.match(v.tax_id.strip()):
+        raise ValueError("VAT number must be 5-20 letters, digits, spaces or hyphens")
+    return v
+
+
 class SupplierCreate(BaseModel):
-    code: str
-    name: str
-    contact_person: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    address: Optional[str] = None
-    tax_id: Optional[str] = None
-    payment_terms: Optional[str] = None
-    lead_time_days: int = 7
-    notes: Optional[str] = None
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=255)
+    contact_person: Optional[str] = Field(None, max_length=200)
+    email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(None, max_length=30)
+    address: Optional[str] = Field(None, max_length=1000)
+    tax_id: Optional[str] = Field(None, max_length=50)           # the supplier's VAT number
+    account_number: Optional[str] = Field(None, max_length=60)   # our account number with them
+    payment_terms: Optional[str] = Field(None, max_length=100)
+    lead_time_days: int = Field(7, ge=0, le=365)
+    spend_limit: Optional[Decimal] = Field(None, ge=0)
+    notes: Optional[str] = Field(None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _check(self):
+        return _clean_supplier_fields(self)
+
+
+class SupplierUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    contact_person: Optional[str] = Field(None, max_length=200)
+    email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(None, max_length=30)
+    address: Optional[str] = Field(None, max_length=1000)
+    tax_id: Optional[str] = Field(None, max_length=50)
+    account_number: Optional[str] = Field(None, max_length=60)
+    payment_terms: Optional[str] = Field(None, max_length=100)
+    lead_time_days: Optional[int] = Field(None, ge=0, le=365)
+    spend_limit: Optional[Decimal] = Field(None, ge=0)
+    is_active: Optional[bool] = None
+    notes: Optional[str] = Field(None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _check(self):
+        return _clean_supplier_fields(self)
 
 
 class SupplierRead(BaseModel):
@@ -75,8 +116,10 @@ class SupplierRead(BaseModel):
     phone: Optional[str]
     address: Optional[str]
     tax_id: Optional[str]
+    account_number: Optional[str] = None
     payment_terms: Optional[str]
     lead_time_days: int
+    spend_limit: Optional[Decimal] = None
     is_active: bool
     notes: Optional[str]
     created_at: datetime
@@ -210,8 +253,36 @@ async def create_supplier(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_session),
 ):
-    supplier = Supplier(tenant_id=tenant_id, **body.model_dump())
+    code = body.code.strip()
+    if (await db.execute(select(Supplier.id).where(Supplier.tenant_id == tenant_id, Supplier.code == code))).first():
+        raise HTTPException(status_code=409, detail=f"A supplier with code '{code}' already exists")
+    supplier = Supplier(tenant_id=tenant_id, **{**body.model_dump(), "code": code})
     db.add(supplier)
+    await db.flush()
+    await db.refresh(supplier)
+    return supplier
+
+
+@router.patch("/suppliers/{supplier_id}", response_model=SupplierRead, dependencies=[Depends(require_tier("write"))])
+async def update_supplier(
+    supplier_id: uuid.UUID,
+    body: SupplierUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    supplier = (await db.execute(select(Supplier).where(Supplier.id == supplier_id, Supplier.tenant_id == tenant_id,
+                                                        Supplier.deleted_at.is_(None)))).scalar_one_or_none()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    changes = body.model_dump(exclude_unset=True)
+    if "code" in changes and changes["code"] != supplier.code:
+        if (await db.execute(select(Supplier.id).where(Supplier.tenant_id == tenant_id, Supplier.code == changes["code"].strip(),
+                                                       Supplier.id != supplier.id))).first():
+            raise HTTPException(status_code=409, detail=f"A supplier with code '{changes['code']}' already exists")
+    for key, value in changes.items():
+        if key in ("code", "name") and value is None:
+            continue
+        setattr(supplier, key, value.strip() if isinstance(value, str) else value)
     await db.flush()
     await db.refresh(supplier)
     return supplier
@@ -296,6 +367,8 @@ async def create_purchase_order(
     for item in body.items:
         if not await _product_exists(db, tenant_id, item.product_id):
             raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+    # Stock is only bought for products the product manager has created and launched (and set suppliers for).
+    await require_catalogue_products(db, tenant_id, [i.product_id for i in body.items])
 
     subtotal = sum((item.quantity_ordered * item.unit_cost_zar for item in body.items), Decimal("0.00"))
     subtotal = money(subtotal)

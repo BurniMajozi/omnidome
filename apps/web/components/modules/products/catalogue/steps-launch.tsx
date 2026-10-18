@@ -167,7 +167,7 @@ export function StepLaunch({ form, setDef, preview, notify }: StepProps) {
 // ── Step 8: review and launch ────────────────────────────────────────────────
 
 /** Which wizard step fixes each launch check. */
-const FIX_STEP: Record<string, number> = { definition: 0, classification: 0, costs: 1, components: 2, price: 3, testing: 6, icasa: 6, icasa_product: 6, icasa_promotion: 6 }
+const FIX_STEP: Record<string, number> = { definition: 0, classification: 0, costs: 1, sourcing: 1, components: 2, price: 3, testing: 6, icasa: 6, icasa_product: 6, icasa_promotion: 6 }
 
 export function StepReview({ form, preview, products, onLaunch, launching, previewError, onRetry, goto }: StepProps & {
   onLaunch: () => void; launching: boolean; previewError: string | null; onRetry: () => void; goto: (step: number) => void

@@ -80,6 +80,14 @@ def test_market_research_is_indexed_as_a_labelled_unverified_note():
     assert len(BC.catalogue_product_card(row, NAMES, NOW).markdown) < 6000       # clipped
 
 
+def test_suppliers_are_named_but_their_prices_never_appear():
+    row = fibre_row(source_refs=[{"supplier_id": "s1", "preferred": True}, {"supplier_id": "s2", "preferred": False}])
+    row["definition"]["sources"] = [{"supplier_id": "s1", "unit_cost": "612.50"}]      # would only arrive if the SQL leaked it
+    md = BC.catalogue_product_card(row, NAMES, NOW, {"s1": "Network Devices Supply", "s2": "Metro Fibre Wholesale"}).markdown
+    assert "## Suppliers" in md and "Network Devices Supply (preferred)" in md and "Metro Fibre Wholesale" in md
+    assert "612" not in md
+
+
 def test_draft_card_is_tagged_and_lower_importance():
     c = BC.catalogue_product_card(fibre_row(status="draft", launched_at=None), NAMES, NOW)
     assert "draft" in c.tags and "Draft (in development)" in c.markdown
@@ -98,7 +106,8 @@ def test_source_registered_and_sql_never_selects_costs():
     assert S.SOURCES["catalogue_products"].module == "inventory"
     src = open(SC.__file__, encoding="utf-8").read()
     assert "SELECT *" not in src.upper()
-    assert "- 'costs' - 'supplier'" in SC._COLS                  # stripped in SQL, not only in the builder
+    assert "- 'costs' - 'supplier' - 'sources'" in SC._COLS      # stripped in SQL, not only in the builder
+    assert "unit_cost" not in SC._COLS                           # supplier prices are never selected
     assert src.count("tenant_id = CAST(:") >= 3                  # every query is tenant filtered
 
 

@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { archiveProduct, deleteProduct, downloadAsset, launchProduct, productHistory, type HistoryEvent, type Product } from "@/lib/catalogue-api"
+import { getProductSupplierPerformance, pct, type ProductSupplierPerformance } from "@/lib/supplier-api"
+import { ScoreBadge } from "../../suppliers/scorecard"
 import { AuthImage, StatusBadge, kpiSet, money, primaryImage, productSummary } from "./shared"
 
 interface Props {
@@ -21,13 +23,18 @@ interface Props {
 
 export function ProductDetail({ product, products, onClose, onEdit, onChanged, onOpen, canEdit = true }: Props) {
   const [history, setHistory] = useState<HistoryEvent[]>([])
+  const [supplierPerf, setSupplierPerf] = useState<ProductSupplierPerformance | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setError(null)
     setHistory([])
-    if (product) productHistory(product.id).then(setHistory).catch(() => setHistory([]))
+    setSupplierPerf(null)
+    if (product) {
+      productHistory(product.id).then(setHistory).catch(() => setHistory([]))
+      if ((product.definition.sources ?? []).length) getProductSupplierPerformance(product.id).then(setSupplierPerf).catch(() => setSupplierPerf(null))
+    }
   }, [product])
 
   async function act(fn: () => Promise<unknown>, done: string) {
@@ -99,6 +106,24 @@ export function ProductDetail({ product, products, onClose, onEdit, onChanged, o
                       </button>
                     ))}
                   </div>
+                </section>
+              )}
+
+              {supplierPerf && supplierPerf.suppliers.length > 0 && (
+                <section><h4 className="mb-1.5 font-semibold text-foreground">Suppliers and how they perform on this product</h4>
+                  <div className="overflow-x-auto rounded-lg border border-border"><table className="w-full min-w-[640px]">
+                    <thead><tr className="border-b border-border bg-muted/20 text-left text-muted-foreground"><th className="px-3 py-2 font-medium">Supplier</th><th className="px-3 py-2 text-right font-medium">Unit cost</th><th className="px-3 py-2 text-right font-medium">Lead</th><th className="px-3 py-2 font-medium">Score</th><th className="px-3 py-2 text-right font-medium">On time</th><th className="px-3 py-2 text-right font-medium">Accepted</th><th className="px-3 py-2 text-right font-medium">Returned</th></tr></thead>
+                    <tbody className="divide-y divide-border/60">{supplierPerf.suppliers.map((s) => (
+                      <tr key={s.supplier_id}>
+                        <td className="px-3 py-2">{s.name}{s.preferred && <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">preferred</span>}{supplierPerf.best_supplier_id === s.supplier_id && <span className="ml-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-400">best</span>}</td>
+                        <td className="px-3 py-2 text-right">{money(s.unit_cost)}{s.cadence === "Monthly" ? " /mo" : ""}</td>
+                        <td className="px-3 py-2 text-right">{s.quoted_lead_days ?? "—"}{s.quoted_lead_days != null ? "d" : ""}{s.metrics.avg_lead_days != null ? <span className="text-muted-foreground"> (actual {s.metrics.avg_lead_days.toFixed(0)}d)</span> : null}</td>
+                        <td className="px-3 py-2"><ScoreBadge m={s.metrics} /></td>
+                        <td className="px-3 py-2 text-right">{pct(s.metrics.on_time_rate)}</td>
+                        <td className="px-3 py-2 text-right">{s.metrics.rejection_rate === null ? "—" : pct(1 - s.metrics.rejection_rate)}</td>
+                        <td className="px-3 py-2 text-right">{s.metrics.units_returned}</td>
+                      </tr>))}</tbody></table></div>
+                  {supplierPerf.best_reason && supplierPerf.suppliers.length > 1 && <p className="mt-1 text-[11px] text-muted-foreground">Best supplier for this product: {supplierPerf.best_reason.toLowerCase()}. Performance comes from receiving in Stock.</p>}
                 </section>
               )}
 

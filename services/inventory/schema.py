@@ -285,7 +285,8 @@ END $$"""))
         ("value_ex_vat_zar", "NUMERIC(14,2) NOT NULL DEFAULT 0"),
         ("vat_zar", "NUMERIC(14,2) NOT NULL DEFAULT 0"),
     ])
-    s += _add_columns("inventory_suppliers", [("spend_limit", "NUMERIC(14,2)")])
+    s += _add_columns("inventory_suppliers", [("spend_limit", "NUMERIC(14,2)"), ("account_number", "VARCHAR(60)")])
+    s += _add_columns("catalogue_products", [("inventory_product_id", "UUID")])
     return s
 
 

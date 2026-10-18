@@ -29,9 +29,9 @@ async function authHeaders(): Promise<Record<string, string>> {
   return { "x-tenant-id": tenantId, "x-user-id": data.session?.user?.id ?? FALLBACK_USER_ID }
 }
 
-async function call<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
+async function request<T>(base: string, path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {}
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${base}${path}`, {
     cache: "no-store",
     ...rest,
     headers: {
@@ -60,8 +60,13 @@ async function call<T>(path: string, init?: RequestInit & { json?: unknown }): P
             : `Request failed (${res.status})`
     throw new CatalogueError(res.status, message, detail)
   }
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
+
+const call = <T>(path: string, init?: RequestInit & { json?: unknown }) => request<T>(API_BASE, path, init)
+/** Any inventory-service route (suppliers, stock, purchasing, performance), with the same auth and error handling. */
+export const inventoryCall = <T>(path: string, init?: RequestInit & { json?: unknown }) => request<T>("/svc/inventory", path, init)
 
 // ── types (mirror services/inventory/routes/catalogue.py) ───────────────────
 
@@ -69,7 +74,26 @@ export type Status = "draft" | "in_review" | "active" | "archived"
 export type Nature = "Digital service" | "Physical item" | "Professional service"
 export type Usage = "Customer-facing" | "Internal consumable" | "Company-owned asset"
 
-export interface Cost { name: string; supplier: string; amount: number | string; cadence: "Monthly" | "Once-off" }
+export interface Cost {
+  name: string
+  supplier: string
+  supplier_id?: string | null
+  amount: number | string
+  cadence: "Monthly" | "Once-off"
+  /** Maintained by the server from the preferred supplier source; shown read-only. */
+  auto?: boolean
+}
+/** One supplier this product can be bought from. */
+export interface Source {
+  supplier_id: string
+  supplier_sku: string
+  unit_cost: number | string
+  cadence: "Monthly" | "Once-off"
+  lead_time_days: number | null
+  moq: number | null
+  preferred: boolean
+  notes: string
+}
 export interface Component { product_id: string; qty: number }
 export interface Fee {
   id: string
@@ -134,6 +158,7 @@ export interface Definition {
   term: number
   launch_date: string | null
   costs: Cost[]
+  sources: Source[]
   components: Component[]
   fees: Fee[]
   media: Asset[]
@@ -174,6 +199,7 @@ export interface Product {
   created_at: string
   updated_at: string
   launched_at: string | null
+  inventory_product_id?: string | null
   checks: Check[]
   ready_to_launch: boolean
   cost_complete: boolean
@@ -261,7 +287,7 @@ export async function downloadAsset(a: Pick<Asset, "url" | "name">) {
 export function blankDefinition(): Definition {
   return {
     description: "", customer_name: "", down: null, up: null, stock: "None", unit: "Each", supplier: "", price: 0, recurring: true,
-    term: 24, launch_date: null, costs: [], components: [], fees: [], media: [], documents: [], policy_refs: [],
+    term: 24, launch_date: null, costs: [], sources: [], components: [], fees: [], media: [], documents: [], policy_refs: [],
     research: { rows: [], kpis: [] },
     readiness: { tests_required: true, tests_exempt_reason: "", tests: [], icasa: { required: null, exempt_reason: "", notice: 7, items: [] } },
   }
