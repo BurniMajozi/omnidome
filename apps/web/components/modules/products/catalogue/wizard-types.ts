@@ -1,4 +1,4 @@
-import type { Check, Definition, Economics, Lists, Nature, Product, ProductInput, Status, Usage } from "@/lib/catalogue-api"
+import type { Check, Definition, Economics, Lists, MarginMatrix, Nature, Product, ProductInput, Status, Usage } from "@/lib/catalogue-api"
 
 export interface Form {
   id?: string
@@ -17,7 +17,7 @@ export interface Form {
   definition: Definition
 }
 
-export interface Preview { checks: Check[]; ready_to_launch: boolean; economics?: Economics }
+export interface Preview { checks: Check[]; ready_to_launch: boolean; economics?: Economics; margin_matrix?: MarginMatrix }
 
 export interface StepProps {
   form: Form

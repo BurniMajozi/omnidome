@@ -115,6 +115,7 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
 
   async function refresh() {
     setLoading(true)
+  const [unitText, setUnitText] = useState<Record<string, string>>({})
     setError("")
     try {
       if (approvalOnly) await purchasingRequest("/approvals/inbox")
@@ -216,18 +217,37 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
   async function handleReceive() {
     if (!receiveTarget) return
     const items = receiveTarget.items
+  const identifiersFor = (productId: string) => catalogue.find((c) => c.inventory_product_id === productId)?.identifiers ?? []
+  /** One line per accepted unit: a serial number, a MAC address, or both separated by a space or comma. */
+  function parseUnits(text: string) {
+    return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+      const parts = l.split(/[\s,;]+/).filter(Boolean)
+      const mac = parts.find((x) => /^([0-9a-f]{2}[:-]?){5}[0-9a-f]{2}$/i.test(x))
+      const serial = parts.find((x) => x !== mac)
+      return { serial: serial ?? null, mac: mac ?? null }
+    })
+  }
+
       .filter((i) => Number(receiveQty[i.id] || 0) > 0)
-      .map((i) => ({
-        po_item_id: i.id, quantity_received: Number(receiveQty[i.id]),
-        quantity_rejected: Math.min(Number(rejectQty[i.id] || 0), Number(receiveQty[i.id])),
-        rejection_reason: Number(rejectQty[i.id] || 0) > 0 ? (rejectReason[i.id] || "").trim() || null : null,
-      }))
+      .map((i) => {
+        const accepted = Number(receiveQty[i.id]) - Math.min(Number(rejectQty[i.id] || 0), Number(receiveQty[i.id]))
+        const ids = identifiersFor(i.product_id)
+        return {
+          po_item_id: i.id, quantity_received: Number(receiveQty[i.id]),
+          quantity_rejected: Math.min(Number(rejectQty[i.id] || 0), Number(receiveQty[i.id])),
+          rejection_reason: Number(rejectQty[i.id] || 0) > 0 ? (rejectReason[i.id] || "").trim() || null : null,
+          units: ids.length ? parseUnits(unitText[i.id] || "") : undefined,
+          _accepted: accepted, _ids: ids,
+        }
+      })
     if (items.length === 0) return
     if (items.some((i) => i.quantity_rejected > 0 && !i.rejection_reason)) { setError("Give a reason for every rejected quantity."); return }
     setBusyId(receiveTarget.id)
     setError("")
     try {
-      const receipt = await purchasingRequest<{ id: string }>(`/purchase-orders/${receiveTarget.id}/goods-receipts`, "POST", { receipt_ref: receiptRef, items })
+    const short = items.find((i) => i._ids.length && (i.units?.length ?? 0) !== i._accepted)
+    if (short) { setError(`Enter ${short._accepted} unit line${short._accepted === 1 ? "" : "s"} (${short._ids.join(" and ").toLowerCase()}), one per accepted unit. You have ${short.units?.length ?? 0}.`); return }
+      const receipt = await purchasingRequest<{ id: string }>(`/purchase-orders/${receiveTarget.id}/goods-receipts`, "POST", { receipt_ref: receiptRef, items: items.map(({ _accepted, _ids, ...rest }) => rest) })
       const target = receiveTarget
       setReceiveTarget(null)
       setReceiveQty({})
@@ -236,6 +256,7 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
       setReceiptRef("")
       setRating(0); setRatingLate(""); setRatingComment("")
       setRateTarget({ grId: receipt.id, poNumber: target.po_number, supplier: supplierName(target.supplier_id), expected: target.expected_delivery ?? null })
+      setUnitText({})
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Receipt failed") }
     finally { setBusyId(null) }
@@ -377,7 +398,7 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
                         ))}
                       </SelectContent>
                     </Select>
-                    {(() => { const p = offers.find((x) => x.inventory_product_id === line.product_id); return p && !p.offer ? <p className="mt-1 text-[11px] text-amber-500">This supplier is not listed for the product. Add them in Product Management first.</p> : p?.offer?.moq ? <p className="mt-1 text-[11px] text-muted-foreground">Minimum order {p.offer.moq}</p> : null })()}
+                    {(() => { const p = offers.find((x) => x.inventory_product_id === line.product_id); return p && !p.offer ? <p className="mt-1 text-[11px] text-amber-500">This supplier is not listed for the product. Add them in Product Management first.</p> : p?.offer ? <p className="mt-1 text-[11px] text-muted-foreground">{p.offer.moq ? `Minimum order ${p.offer.moq}. ` : ""}{(() => { const m = p.sources.find((s) => s.supplier_id === p.offer!.supplier_id); const alt = p.sources.filter((s) => s.supplier_id !== p.offer!.supplier_id && s.margin_pct != null).map((s) => `${s.supplier_name} ${s.margin_pct}%`); return m?.margin_pct != null ? `Margin from this supplier ${m.margin_pct}%${alt.length ? ` (others: ${alt.join(", ")})` : ""}.` : "" })()}</p> : null })()}
                   </div>
                   <Input
                     type="number" placeholder="Qty"
@@ -441,6 +462,16 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
                       <Input type="number" min="0" max={receiveQty[item.id]} placeholder="Rejected" aria-label="Quantity rejected" value={rejectQty[item.id] ?? ""}
                         onChange={(e) => setRejectQty({ ...rejectQty, [item.id]: e.target.value })} />
                       <Input placeholder="Reason for rejection (damaged, wrong model…)" aria-label="Rejection reason" disabled={!Number(rejectQty[item.id] || 0)}
+                  {Number(receiveQty[item.id] || 0) > 0 && identifiersFor(item.product_id).length > 0 && (
+                    <div className="space-y-1">
+                      <Label htmlFor={`units-${item.id}`} className="text-xs text-muted-foreground">
+                        {identifiersFor(item.product_id).join(" and ")} per accepted unit, one unit per line (e.g. “SN12345 AA:BB:CC:DD:EE:FF”)
+                      </Label>
+                      <textarea id={`units-${item.id}`} rows={3} value={unitText[item.id] ?? ""} onChange={(e) => setUnitText({ ...unitText, [item.id]: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs" />
+                      <div className="text-[11px] text-muted-foreground">{parseUnits(unitText[item.id] || "").length} of {Number(receiveQty[item.id]) - Math.min(Number(rejectQty[item.id] || 0), Number(receiveQty[item.id]))} units entered</div>
+                    </div>
+                  )}
                         value={rejectReason[item.id] ?? ""} onChange={(e) => setRejectReason({ ...rejectReason, [item.id]: e.target.value })} />
                     </div>
                   )}

@@ -32,6 +32,8 @@ export function StepSourcing({ form, setDef, preview, notify }: StepProps) {
 
   const names = new Map(suppliers.map((s) => [s.id, s.name]))
   const free = suppliers.filter((s) => !d.sources.some((x) => x.supplier_id === s.id))
+  const matrix = preview?.margin_matrix
+  const marginFor = (id: string) => matrix?.suppliers.find((x) => x.supplier_id === id)
   const perfFor = (id: string) => perf?.suppliers.find((x) => x.supplier_id === id)
 
   const setSources = (sources: Source[]) => {
@@ -114,6 +116,13 @@ export function StepSourcing({ form, setDef, preview, notify }: StepProps) {
                   {s.preferred && <Badge className="gap-1 text-[10px]"><Star className="h-3 w-3" /> Preferred</Badge>}
                   {best && <Badge variant="outline" className="border-emerald-500/40 text-[10px] text-emerald-400">Best performer</Badge>}
                   {p && <ScoreBadge m={p.metrics} />}
+                  {(() => {
+                    const m = marginFor(s.supplier_id)
+                    if (!m) return null
+                    return m.complete && m.margin_pct !== null
+                      ? <Badge variant="outline" className={`text-[10px] ${m.margin_pct < 0 ? "border-red-500/40 text-red-400" : "border-sky-500/40 text-sky-400"}`}>Margin {m.margin_pct.toFixed(1)}% · {money(m.profit)} profit</Badge>
+                      : <Badge variant="outline" className="text-[10px] text-muted-foreground">Margin incomplete</Badge>
+                  })()}
                 </div>
                 <div className="flex gap-1.5">
                   {!s.preferred && <Button type="button" variant="ghost" size="sm" className="h-8 text-[11px]" onClick={() => prefer(i)}>Make preferred</Button>}
@@ -155,7 +164,13 @@ export function StepSourcing({ form, setDef, preview, notify }: StepProps) {
         {costs.map(({ cost: c, index }) => (
           <div key={index} className="grid items-end gap-2 sm:grid-cols-[1.4fr_1fr_110px_120px_36px]">
             <Field label="Cost component"><Input value={c.name} onChange={(ev) => updCost(index, { name: ev.target.value })} className="h-9 text-xs" /></Field>
-            <Field label="Source"><Input value={c.supplier} onChange={(ev) => updCost(index, { supplier: ev.target.value })} className="h-9 text-xs" /></Field>
+            <Field label="Applies to">
+              <select value={c.supplier_id ?? ""} className={selectCls} aria-label="Applies to"
+                onChange={(ev) => updCost(index, ev.target.value ? { supplier_id: ev.target.value, supplier: names.get(ev.target.value) ?? c.supplier } : { supplier_id: null, supplier: "Internal" })}>
+                <option value="">All suppliers (internal)</option>
+                {d.sources.map((s) => <option key={s.supplier_id} value={s.supplier_id}>Only {names.get(s.supplier_id) ?? "supplier"}</option>)}
+              </select>
+            </Field>
             <Field label="Amount (R)"><Input type="number" min={0} step="0.01" value={c.amount} onChange={(ev) => updCost(index, { amount: ev.target.value })} className="h-9 text-xs" /></Field>
             <Field label="Cadence"><select value={c.cadence} className={selectCls} onChange={(ev) => updCost(index, { cadence: ev.target.value as Cost["cadence"] })}><option>Monthly</option><option>Once-off</option></select></Field>
             <Button type="button" variant="outline" size="sm" className={`${iconBtn} hover:border-red-500/60 hover:text-red-400`} aria-label={`Remove cost line ${index + 1}`} onClick={() => setDef({ costs: d.costs.filter((_, k) => k !== index) })}><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -171,7 +186,7 @@ export function StepSourcing({ form, setDef, preview, notify }: StepProps) {
           {!e.complete && <p className="mt-2 text-amber-400">Incomplete cost sheet: margin is not shown until every cost is captured.</p>}
         </div>
       )}
-      <p className="text-[11px] text-muted-foreground">Alternative supplier quotes are separate sources, never added together. Cost changes after launch create dated revisions.</p>
+      <p className="text-[11px] text-muted-foreground">Each supplier is costed on its own: its unit cost plus the extra costs that apply to it (freight, duty, accessories) plus the costs that apply to all. Quotes are never added together. Cost changes after launch create dated revisions.</p>
     </div>
   )
 }

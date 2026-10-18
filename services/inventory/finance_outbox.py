@@ -34,6 +34,45 @@ def enqueue(db, gr, tenant_id, accepted_value):
     ))
 
 
+def enqueue_payload(db, tenant_id, payload, value):
+    """Queue any journal in the caller's transaction (no I/O). Zero-value movements post nothing."""
+    if value <= 0:
+        return False
+    db.add(InventoryFinanceOutbox(tenant_id=tenant_id, source=payload["source"], source_id=payload["source_id"],
+                                  payload=payload, status="pending", attempts=0))
+    return True
+
+
+async def deliver_quietly(tenant_id, user_id=None):
+    """After the caller's transaction commits: try to deliver, never fail the stock operation (rows stay queued for retry)."""
+    try:
+        await deliver(tenant_id, user_id)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger("inventory.finance").warning("finance delivery deferred for tenant %s", tenant_id, exc_info=True)
+
+
+async def retry_loop(interval_seconds: int = 60):
+    """Background: keep retrying queued journals for every tenant until finance accepts them."""
+    import asyncio
+    import logging
+    log = logging.getLogger("inventory.finance")
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            now = datetime.now(timezone.utc)
+            async with _get_session_factory()() as db:
+                tenants = (await db.execute(select(InventoryFinanceOutbox.tenant_id).where(
+                    InventoryFinanceOutbox.status.in_(("pending", "failed")),
+                    or_(InventoryFinanceOutbox.next_attempt_at.is_(None), InventoryFinanceOutbox.next_attempt_at <= now)).distinct().limit(50))).scalars().all()
+            for t in tenants:
+                await deliver(t)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.warning("finance retry loop error", exc_info=True)
+
+
 async def deliver(tenant_id, user_id=None, *, force=False, limit=100, session_factory=None):
     factory = session_factory or _get_session_factory()
     delivered = failed = 0

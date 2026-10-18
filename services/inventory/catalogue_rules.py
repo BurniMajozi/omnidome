@@ -38,6 +38,20 @@ def number_is_valid(raw: str) -> bool:
     return bool(NUMBER_RE.match(normalise_number(raw)))
 
 
+def ean13_check_digit(first12: str) -> int:
+    total = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(first12))
+    return (10 - total % 10) % 10
+
+
+def ean13_valid(code: str) -> bool:
+    return bool(re.fullmatch(r"\d{13}", code or "")) and ean13_check_digit(code[:12]) == int(code[12])
+
+
+def norm_name(s: str) -> str:
+    """Test names compare without case, spaces or punctuation, so 'Fulfilment & stock reservation,' still matches."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
 def add_business_days(start: date, n: int) -> date:
     """Weekends excluded; public holidays are not modelled (a tenant calendar is future work)."""
     d, k = start, 0
@@ -59,17 +73,46 @@ def _parse_date(v: Any) -> Optional[date]:
 
 # ── economics ────────────────────────────────────────────────────────────────
 
-def economics(pid: str, catalogue: dict[str, dict], _seen: Optional[frozenset] = None) -> dict:
+def preferred_supplier_id(d: dict) -> Optional[str]:
+    pref = next((s for s in (d.get("sources") or []) if s.get("preferred")), None)
+    return str(pref["supplier_id"]) if pref else None
+
+
+def effective_costs(d: dict, supplier_id: Optional[str] = None, names: Optional[dict] = None) -> list[dict]:
+    """The cost lines that apply when the product is bought from ``supplier_id`` (default: the preferred supplier).
+
+    Shared lines (no supplier) always apply; a line assigned to a supplier applies only to that supplier's scenario;
+    the purchase cost is the chosen source's own price. The stored automatic line is ignored here and rebuilt, so
+    every supplier scenario is computed the same way."""
+    sources = d.get("sources") or []
+    sid = supplier_id or preferred_supplier_id(d)
+    lines = []
+    for c in d.get("costs") or []:
+        if c.get("auto"):
+            continue
+        assigned = c.get("supplier_id")
+        if assigned and sid and str(assigned) != sid:
+            continue
+        lines.append(c)
+    src = next((s for s in sources if str(s["supplier_id"]) == sid), None) if sid else None
+    if src is not None:
+        lines.insert(0, {"name": "Purchase cost", "supplier": (names or {}).get(sid) or sid, "supplier_id": sid,
+                         "amount": src.get("unit_cost") or 0, "cadence": src.get("cadence") or "Once-off", "auto": True})
+    return lines
+
+
+def economics(pid: str, catalogue: dict[str, dict], _seen: Optional[frozenset] = None, supplier_id: Optional[str] = None,
+              names: Optional[dict] = None) -> dict:
     """Direct-cost economics of one product, recursing through included components.
 
     ``catalogue`` maps product id -> product view. A missing or cyclic component makes the cost sheet incomplete;
-    a missing cost is never treated as zero."""
+    a missing cost is never treated as zero. ``supplier_id`` prices the product as bought from that supplier."""
     seen = (_seen or frozenset()) | {pid}
     p = catalogue.get(pid)
     if p is None:
         return {"complete": False, "monthly": Decimal(0), "upfront": Decimal(0)}
     d = p.get("definition") or {}
-    costs = d.get("costs") or []
+    costs = effective_costs(d, supplier_id, names)
     complete = bool(costs) and all(c.get("name") and c.get("supplier") for c in costs)
     monthly = upfront = Decimal(0)
     for c in costs:
@@ -102,6 +145,60 @@ def economics(pid: str, catalogue: dict[str, dict], _seen: Optional[frozenset] =
     return {"complete": complete, "monthly": monthly, "upfront": upfront, "horizon": horizon,
             "revenue": revenue, "cost": cost, "profit": revenue - cost,
             "margin_pct": (None if revenue == 0 else round((revenue - cost) / revenue * 100, 2))}
+
+
+CHANNELS = ("Online storefront", "Field sales", "Call centre", "Partner / reseller", "Retail store")
+
+
+def channel_commission(cfg: dict, d: dict, e: dict) -> Decimal:
+    """What one sale through a channel costs in commission.
+
+    percent: of the contract value (default), of the first month, or of the once-off charges; fixed: a flat amount per sale."""
+    value = _d(cfg.get("value"))
+    kind = cfg.get("commission_type") or "none"
+    if kind == "fixed":
+        return value
+    if kind != "percent":
+        return Decimal(0)
+    recurring = bool(d.get("recurring", True))
+    price = _d(d.get("price"))
+    fees = [f for f in d.get("fees") or [] if f.get("enabled") and f.get("mode") == "Charge"]
+    fee_once = sum((_d(f.get("amount")) for f in fees if f.get("cadence") == "Once-off"), Decimal(0))
+    fee_monthly = sum((_d(f.get("amount")) for f in fees if f.get("cadence") == "Monthly"), Decimal(0))
+    contract = e.get("revenue", Decimal(0))
+    first_month = price + fee_monthly + fee_once if recurring else contract
+    once_off = fee_once if recurring else contract
+    basis = {"contract": contract, "first_month": first_month, "once_off": once_off}.get(cfg.get("basis") or "contract", contract)
+    return (basis * value / Decimal(100)).quantize(Decimal("0.01"))
+
+
+def margin_matrix(pid: str, catalogue: dict[str, dict], names: Optional[dict] = None) -> dict:
+    """Profit and margin for every supplier the product can be bought from, and through every sales channel.
+
+    Rows are suppliers (one row with supplier_id null when no suppliers are listed); ``channels`` holds the margin after
+    that channel's commission. Direct costs only, same basis as ``economics``."""
+    p = catalogue.get(pid) or {}
+    d = p.get("definition") or {}
+    channels = [c for c in d.get("channels") or [] if c.get("enabled", True)]
+    sources = d.get("sources") or []
+    rows = []
+    for s in (sources or [None]):
+        sid = str(s["supplier_id"]) if s else None
+        e = economics(pid, catalogue, supplier_id=sid, names=names)
+        revenue, profit = e.get("revenue", Decimal(0)), e.get("profit", Decimal(0))
+        row = {"supplier_id": sid, "name": (names or {}).get(sid) if sid else None, "preferred": bool(s and s.get("preferred")),
+               "unit_cost": float(_d(s.get("unit_cost"))) if s else None, "cadence": (s or {}).get("cadence"),
+               "complete": e["complete"], "revenue": float(revenue), "cost": float(e.get("cost", 0)), "profit": float(profit),
+               "margin_pct": None if not revenue else round(float(profit / revenue * 100), 2), "channels": {}}
+        for ch in channels:
+            comm = channel_commission(ch, d, e)
+            after = profit - comm
+            row["channels"][ch["channel"]] = {"commission": float(comm), "profit": float(after),
+                                              "margin_pct": None if not revenue else round(float(after / revenue * 100), 2)}
+        rows.append(row)
+    return {"channels": [{"channel": c["channel"], "commission_type": c.get("commission_type", "none"), "value": float(_d(c.get("value"))),
+                          "basis": c.get("basis", "contract"), "tier_name": c.get("tier_name", "")} for c in channels],
+            "suppliers": rows}
 
 
 def would_cycle(parent_id: str, child_id: str, catalogue: dict[str, dict]) -> bool:
@@ -190,7 +287,7 @@ def launch_checks(p: dict, catalogue: dict[str, dict]) -> list[dict]:
         plan = standard_tests(p.get("nature") or "")
 
         def done(name: str) -> bool:
-            return any(t.get("name") == name and (t.get("result") == "Pass" or (t.get("result") == "Waived" and (t.get("notes") or "").strip()))
+            return any(norm_name(t.get("name")) == norm_name(name) and (t.get("result") == "Pass" or (t.get("result") == "Waived" and (t.get("notes") or "").strip()))
                        and (t.get("tester") or "").strip() and t.get("date") for t in tests)
 
         bad = [t for t in tests if t.get("result") in ("Fail", "Pending")

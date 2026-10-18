@@ -18,7 +18,9 @@ from services.common.auth import AuthContext, get_auth_context, get_current_tena
 from services.common.http_client import service_get, service_post
 from services.inventory.access import require_access, require_tier
 from services.inventory import finance_outbox
-from services.inventory.catalogue_stock import require_catalogue_products
+from services.inventory.catalogue_stock import require_catalogue_products, validate_units
+from services.inventory.catalogue_models import InventoryUnit
+from services.inventory.delivery import delivery_details, snapshot_delivery
 from services.inventory.purchasing_helpers import (
     VAT_RATE, money, approval_hash, validate_signature, require_state,
     validate_receipt, matches_receipt, render_purchase_order_pdf,
@@ -188,12 +190,19 @@ class PurchaseOrderRead(BaseModel):
         from_attributes = True
 
 
+class UnitInput(BaseModel):
+    serial: Optional[str] = Field(None, max_length=100)
+    mac: Optional[str] = Field(None, max_length=17)
+
+
 class GRItemInput(BaseModel):
     po_item_id: uuid.UUID
     quantity_received: int = Field(gt=0)
     quantity_rejected: int = Field(0, ge=0)
     rejection_reason: Optional[str] = None
     serial_numbers: Optional[List[str]] = None
+    # One entry per ACCEPTED unit: serial number and/or MAC address, checked against the product's definition.
+    units: Optional[List[UnitInput]] = None
 
 
 class GoodsReceiptCreate(BaseModel):
@@ -758,6 +767,13 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
     levels = {}
     for product_id in sorted({by_id[str(i.po_item_id)].product_id for i in body.items}, key=str):
         levels[product_id] = await locked_level(db, tenant_id, product_id, po.warehouse_id)
+    # Serial numbers / MAC addresses are validated before anything is written, so a bad scan leaves stock untouched.
+    cleaned_units = {}
+    for item in body.items:
+        line = by_id[str(item.po_item_id)]
+        cleaned_units[str(item.po_item_id)] = await validate_units(
+            db, tenant_id, line.product_id, item.quantity_received - item.quantity_rejected,
+            [u.model_dump() for u in (item.units or [])] or [{"serial": s} for s in (item.serial_numbers or [])])
 
     now = datetime.now(timezone.utc)
     gr = GoodsReceipt(tenant_id=tenant_id, po_id=po.id, warehouse_id=po.warehouse_id,
@@ -777,7 +793,11 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
         accepted_total += accepted
         db.add(GoodsReceiptItem(gr_id=gr.id, product_id=line.product_id, quantity_ordered=line.quantity_ordered,
             quantity_received=item.quantity_received, quantity_accepted=accepted, quantity_rejected=item.quantity_rejected,
-            unit_cost_zar=line.unit_cost_zar, serial_numbers=item.serial_numbers or [], rejection_reason=item.rejection_reason))
+            unit_cost_zar=line.unit_cost_zar, serial_numbers=[u["serial"] for u in cleaned_units[str(item.po_item_id)] if u["serial"]] or item.serial_numbers or [],
+            rejection_reason=item.rejection_reason))
+        for u in cleaned_units[str(item.po_item_id)]:
+            db.add(InventoryUnit(tenant_id=tenant_id, product_id=line.product_id, gr_id=gr.id, supplier_id=po.supplier_id,
+                                 serial=u["serial"], mac=u["mac"], status="in_stock"))
         if accepted:
             level = levels[line.product_id]
             await db.execute(update(InventoryLevel).where(InventoryLevel.id == level.id, InventoryLevel.tenant_id == tenant_id)
@@ -785,7 +805,7 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
             db.add(StockMovement(tenant_id=tenant_id, product_id=line.product_id, movement_type="purchase_receipt",
                 quantity=accepted, from_location_type="supplier", from_location_id=po.supplier_id,
                 to_location_type="warehouse", to_location_id=po.warehouse_id, po_id=po.id, gr_id=gr.id,
-                performed_by=user_id, performed_by_type="stock_controller", serial_numbers=item.serial_numbers or [],
+                performed_by=user_id, performed_by_type="stock_controller", serial_numbers=[u["serial"] for u in cleaned_units[str(item.po_item_id)] if u["serial"]] or item.serial_numbers or [],
                 notes=f"Received against {po.po_number} / {gr.gr_number}"))
         # Rejected units remain outstanding for replacement; only accepted units fulfill the PO.
         line.quantity_received += accepted

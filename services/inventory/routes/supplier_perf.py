@@ -22,6 +22,8 @@ from services.inventory.access import require_tier
 from services.inventory.catalogue_models import CatalogueProduct, SupplierEvaluation, SupplierReturn
 from services.inventory.database import (GoodsReceipt, GoodsReceiptItem, Product, PurchaseOrder, PurchaseOrderItem,
                                          StockMovement, Supplier, get_session)
+from services.inventory import finance_outbox
+from services.inventory.purchasing_helpers import return_journal
 from services.inventory.stock import apply_move
 
 router = APIRouter(tags=["Supplier performance"])
@@ -237,7 +239,21 @@ async def return_to_supplier(body: ReturnIn, tenant_id: uuid.UUID = Depends(get_
                          f"supplier-return-{ret.id}")
         ret.stock_adjusted = True
         await db.flush()
-    return {"id": str(ret.id), "supplier_id": str(ret.supplier_id), "quantity": ret.quantity, "stock_adjusted": ret.stock_adjusted, "status": ret.status}
+        # Finance: reverse the purchase at what we paid (latest receipt from this supplier, else the stock item's cost).
+        paid = (await db.execute(select(GoodsReceiptItem.unit_cost_zar).join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptItem.gr_id)
+                                 .join(PurchaseOrder, PurchaseOrder.id == GoodsReceipt.po_id)
+                                 .where(PurchaseOrder.tenant_id == tenant_id, PurchaseOrder.supplier_id == body.supplier_id,
+                                        GoodsReceiptItem.product_id == body.product_id)
+                                 .order_by(GoodsReceipt.received_at.desc()).limit(1))).scalar()
+        unit = Decimal(str(paid if paid is not None else prod.cost_price or 0))
+        finance_posted = finance_outbox.enqueue_payload(db, tenant_id, return_journal(ret.id, unit * body.quantity, date.today(), sup.name), unit * body.quantity)
+    else:
+        finance_posted = False
+    await db.commit()
+    if finance_posted:
+        await finance_outbox.deliver_quietly(tenant_id, user_id)
+    return {"id": str(ret.id), "supplier_id": str(ret.supplier_id), "quantity": ret.quantity, "stock_adjusted": ret.stock_adjusted,
+            "finance_posted": finance_posted, "status": ret.status}
 
 
 @router.get("/supplier-returns")
@@ -280,6 +296,9 @@ async def profitability(months: int = Query(12, ge=1, le=36), tenant_id: uuid.UU
             sup = suppliers.get(sid)
             src_rows.append({"supplier_id": sid, "name": sup.name if sup else "Unknown", "preferred": bool(s.get("preferred")),
                              "unit_cost": float(s.get("unit_cost") or 0), "metrics": metrics_for(facts, sid, inv) if inv else scoring.summarise([], [], [], [], [], [], None)})
+        matrix = {m["supplier_id"]: m for m in rules.margin_matrix(str(r.id), catalogue, {k: v.name for k, v in suppliers.items()})["suppliers"]}
+        for sr in src_rows:
+            sr["margin_pct"] = (matrix.get(sr["supplier_id"]) or {}).get("margin_pct")
         best = scoring.best_for_product(src_rows)
         pref = next((s for s in src_rows if s["preferred"]), None)
         revenue, cost = float(e.get("revenue", 0)), float(e.get("cost", 0))
@@ -293,6 +312,8 @@ async def profitability(months: int = Query(12, ge=1, le=36), tenant_id: uuid.UU
             "preferred_supplier": pref["name"] if pref else None,
             "best_supplier": ({"supplier_id": best["supplier_id"], "name": best["name"], "unit_cost": best["unit_cost"], "score": best["metrics"]["score"]} if best else None),
             "suppliers": len(src_rows),
+            "supplier_margins": [{"supplier_id": s["supplier_id"], "name": s["name"], "unit_cost": s["unit_cost"], "margin_pct": s["margin_pct"],
+                                  "preferred": s["preferred"], "score": s["metrics"]["score"]} for s in src_rows],
         })
     complete = [x for x in products if x["cost_complete"] and x["revenue"] > 0]
     weighted = [x for x in complete if x["volume_90d"]]

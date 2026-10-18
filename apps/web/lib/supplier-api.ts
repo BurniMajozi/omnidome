@@ -130,8 +130,11 @@ export interface PurchasableProduct {
   name: string
   unit: string
   stock: string | null
-  sources: { supplier_id: string; supplier_name: string; unit_cost: number | string; lead_time_days: number | null; moq: number | null; preferred: boolean; supplier_sku: string }[]
+  sources: { supplier_id: string; supplier_name: string; unit_cost: number | string; lead_time_days: number | null; moq: number | null; preferred: boolean; supplier_sku: string; margin_pct?: number | null; profit?: number; sell_price?: number }[]
   offer: { supplier_id: string; unit_cost: number | string; lead_time_days: number | null; moq: number | null; supplier_sku: string } | null
+  /** What stock must capture per received unit. */
+  identifiers?: ("Serial number" | "MAC address")[]
+  barcode?: string | null
   preferred: { supplier_id: string; supplier_name: string; unit_cost: number | string } | null
 }
 export const getPurchasable = (supplierId?: string) => inventoryCall<PurchasableProduct[]>(`/catalogue/purchasable-products${supplierId ? `?supplier_id=${supplierId}` : ""}`)
@@ -159,6 +162,7 @@ export interface ProfitRow {
   preferred_supplier: string | null
   best_supplier: { supplier_id: string; name: string; unit_cost: number; score: number | null } | null
   suppliers: number
+  supplier_margins: { supplier_id: string; name: string; unit_cost: number; margin_pct: number | null; preferred: boolean; score: number | null }[]
 }
 export interface Profitability {
   months: number

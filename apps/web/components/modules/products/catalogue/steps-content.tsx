@@ -14,7 +14,7 @@ import type { StepProps } from "./wizard-types"
 const IMAGE_EXT = ["png", "jpg", "jpeg", "webp", "avif", "gif"]
 const MODEL_EXT = ["glb", "gltf", "usdz"]
 const DOC_EXT = ["pdf", "docx", "txt"]
-const DOC_CATEGORIES = ["Terms & conditions", "Fee schedule", "Instructions", "Manual", "Warranty", "Installation guide", "Other"]
+const DOC_CATEGORIES = ["Terms & conditions", "Fee schedule", "Instructions", "Manual", "Warranty", "Installation guide", "Fact sheet", "Other"]
 const ext = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "")
 const iconDanger = "h-8 w-8 p-0 hover:border-red-500/60 hover:text-red-400"
 
@@ -25,7 +25,6 @@ export function StepMedia({ form, setDef, ensureSaved, notify }: StepProps) {
   const mediaInput = useRef<HTMLInputElement>(null)
   const docInput = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
-  const [policy, setPolicy] = useState("")
 
   async function add(files: FileList | null, group: "media" | "documents") {
     if (!files?.length) return
@@ -137,19 +136,25 @@ export function StepMedia({ form, setDef, ensureSaved, notify }: StepProps) {
         ))}
       </div>
 
-      <div className="space-y-3 rounded-lg border border-border p-4">
-        <div><h4 className="text-xs font-semibold text-foreground">Fee policy and T&amp;C references</h4><p className="text-[11px] text-muted-foreground">Reference the approved invoice fee policy or terms by name and version. Customers see these on quotes, invoices and the portal.</p></div>
-        {d.policy_refs.map((r, i) => (
-          <div key={i} className="flex items-center justify-between rounded-md border border-border px-3 py-1.5 text-xs">
-            <span>{r}</span>
-            <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 hover:text-red-400" aria-label={`Remove ${r}`} onClick={() => setDef({ policy_refs: d.policy_refs.filter((_, k) => k !== i) })}><Trash2 className="h-3.5 w-3.5" /></Button>
+      <div className="space-y-2 rounded-lg border border-border p-4">
+        <h4 className="text-xs font-semibold text-foreground">Fee policy and T&amp;C references</h4>
+        {d.fee_policies.length > 0 ? (
+          <ul className="space-y-1 text-xs">
+            {d.fee_policies.map((p) => <li key={p.policy_id} className="rounded-md border border-border px-3 py-1.5">{p.name} <span className="text-muted-foreground">v{p.version}</span></li>)}
+          </ul>
+        ) : <p className="text-xs text-muted-foreground">No billing fee policy linked yet.</p>}
+        <p className="text-[11px] text-muted-foreground">Fee policies are linked from Billing under “Selling price &amp; fees”, so the backend applies the real policy instead of free text.</p>
+        {d.policy_refs.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-[11px] text-muted-foreground">Older free-text references (replace with a linked policy):</div>
+            {d.policy_refs.map((ref, i) => (
+              <div key={i} className="flex items-center justify-between rounded-md border border-border px-3 py-1.5 text-xs">
+                <span>{ref}</span>
+                <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 hover:text-red-400" aria-label={`Remove ${ref}`} onClick={() => setDef({ policy_refs: d.policy_refs.filter((_, k) => k !== i) })}><Trash2 className="h-3.5 w-3.5" /></Button>
+              </div>
+            ))}
           </div>
-        ))}
-        <div className="flex gap-2">
-          <Input value={policy} placeholder="e.g. Early-termination policy v2" onChange={(e) => setPolicy(e.target.value)} className="h-9 text-xs" aria-label="Policy reference"
-            onKeyDown={(e) => { if (e.key === "Enter" && policy.trim()) { e.preventDefault(); setDef({ policy_refs: [...d.policy_refs, policy.trim()] }); setPolicy("") } }} />
-          <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 text-xs" disabled={!policy.trim()} onClick={() => { setDef({ policy_refs: [...d.policy_refs, policy.trim()] }); setPolicy("") }}><Plus className="h-3.5 w-3.5" /> Add</Button>
-        </div>
+        )}
       </div>
     </div>
   )

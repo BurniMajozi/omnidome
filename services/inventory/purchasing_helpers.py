@@ -104,7 +104,38 @@ def journal_payload(gr, accepted_value):
     }
 
 
-def render_purchase_order_pdf(po, items, supplier_name):
+def _journal(source, source_id, day, description, lines):
+    return {"entry_date": day.isoformat(), "description": description, "source": source, "source_id": source_id, "auto_post": True,
+            "lines": [l for l in lines if Decimal(l["debit"]) or Decimal(l["credit"])]}
+
+
+def return_journal(return_id, value, day, supplier_name="supplier"):
+    """Stock sent back to a supplier: reverse the purchase (payable down, inventory and input VAT down)."""
+    value = money(value)
+    vat = money(value * VAT_RATE)
+    return _journal("INVENTORY_RETURN", str(return_id), day, f"Return to {supplier_name}", [
+        {"account_code": "2000", "account_name": "Accounts Payable", "debit": str(value + vat), "credit": "0.00"},
+        {"account_code": "1200", "account_name": "Inventory", "debit": "0.00", "credit": str(value)},
+        {"account_code": "2210", "account_name": "VAT Input", "debit": "0.00", "credit": str(vat)}])
+
+
+def writeoff_journal(source_id, value, day):
+    """Stock written off (damage, loss): expense it and take it out of inventory."""
+    value = money(value)
+    return _journal("INVENTORY_WRITEOFF", source_id, day, "Stock write-off", [
+        {"account_code": "6900", "account_name": "General & Administrative", "debit": str(value), "credit": "0.00"},
+        {"account_code": "1200", "account_name": "Inventory", "debit": "0.00", "credit": str(value)}])
+
+
+def dispatch_journal(source_id, value, day, reference=""):
+    """Stock issued to a customer or job: equipment cost of service out of inventory."""
+    value = money(value)
+    return _journal("INVENTORY_DISPATCH", source_id, day, f"Stock issued {reference}".strip(), [
+        {"account_code": "5100", "account_name": "Cost of Service - Equipment COGS", "debit": str(value), "credit": "0.00"},
+        {"account_code": "1200", "account_name": "Inventory", "debit": "0.00", "credit": str(value)}])
+
+
+def render_purchase_order_pdf(po, items, supplier_name, delivery=None):
     """Real PDF bytes when ReportLab is installed in the service runtime."""
     try:
         from reportlab.pdfgen import canvas

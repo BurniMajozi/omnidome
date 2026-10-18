@@ -10,6 +10,7 @@ from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id, get_current_user_id
 from services.inventory.access import require_tier
+from services.inventory import finance_outbox
 from services.inventory.stock import apply_move, checkout
 from services.common.background_tasks import schedule_background
 from services.inventory.database import get_session, init_tables, Product, ProductCategory, Warehouse, InventoryLevel, StockMovement
@@ -41,6 +42,7 @@ async def startup_entitlements() -> None:
     await init_tables()
 
 
+    schedule_background(finance_outbox.retry_loop())      # queued journals keep retrying until finance accepts them
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)
@@ -346,7 +348,10 @@ async def move_stock(
     idempotency_key: Optional[str] = Header(None),
     db=Depends(get_session),
 ):
-    return await apply_move(db, tenant_id, user_id, move, idempotency_key or move.client_ref)
+    result = await apply_move(db, tenant_id, user_id, move, idempotency_key or move.client_ref)
+    await db.commit()
+    await finance_outbox.deliver_quietly(tenant_id, user_id)
+    return result
 
 @app.post("/warehouses", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("manager"))])
 async def create_warehouse(wh: WarehouseCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
@@ -545,7 +550,10 @@ async def checkout_stock(
     idempotency_key: Optional[str] = Header(None),
     db=Depends(get_session),
 ):
-    return await checkout(db, tenant_id, user_id, payload, idempotency_key or payload.client_ref)
+    result = await checkout(db, tenant_id, user_id, payload, idempotency_key or payload.client_ref)
+    await db.commit()
+    await finance_outbox.deliver_quietly(tenant_id, user_id)
+    return result
 
 
 if __name__ == "__main__":

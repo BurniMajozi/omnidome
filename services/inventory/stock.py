@@ -4,7 +4,11 @@ import json
 import uuid
 from fastapi import HTTPException
 from sqlalchemy import select, text
+from datetime import datetime, timezone
+from decimal import Decimal
 from services.inventory.database import Product, Warehouse, InventoryLevel, StockMovement
+from services.inventory import finance_outbox
+from services.inventory.purchasing_helpers import dispatch_journal, writeoff_journal
 
 MOVEMENTS = {"PURCHASE": "purchase_receipt", "RETURN_FROM_CUSTOMER": "customer_return",
              "TRANSFER": "warehouse_transfer", "WRITE_OFF": "write_off", "SALE": "customer_dispatch"}
@@ -63,6 +67,20 @@ async def replay(db, tenant_id, key, payload_hash):
         raise HTTPException(409, "Idempotency-Key was already used for a different request")
     return saved["response"]
 
+async def post_movement_journal(db, tenant_id, move, key):
+    """Stock leaving for a customer (SALE) or written off costs money in finance: queue the journal in the same transaction.
+
+    A return to a supplier is also a WRITE_OFF move, but its own journal (reversing the purchase) is posted by the return."""
+    if move.movement_type not in ("WRITE_OFF", "SALE") or (key or "").startswith("supplier-return-"):
+        return
+    cost = (await db.execute(select(Product.cost_price).where(Product.id == move.product_id, Product.tenant_id == tenant_id))).scalar() or 0
+    value = Decimal(str(cost)) * move.quantity
+    source_id = hashlib.sha1((key or "").encode()).hexdigest()
+    day = datetime.now(timezone.utc).date()
+    journal = writeoff_journal(source_id, value, day) if move.movement_type == "WRITE_OFF" else dispatch_journal(source_id, value, day, "to customer")
+    finance_outbox.enqueue_payload(db, tenant_id, journal, value)
+
+
 async def apply_move(db, tenant_id, user_id, move, key):
     await lock_operation(db, tenant_id, key)
     digest = fingerprint(move.model_dump(mode="json", exclude={"client_ref"}))
@@ -93,6 +111,7 @@ async def apply_move(db, tenant_id, user_id, move, key):
         dest_after_soh=destination.soh if destination else None,
         notes=json.dumps({"fingerprint": digest, "response": response})))
     await db.flush()
+    await post_movement_journal(db, tenant_id, move, key)
     return response
 
 async def checkout(db, tenant_id, user_id, payload, key):
@@ -140,4 +159,9 @@ async def checkout(db, tenant_id, user_id, payload, key):
     movements[0].notes = json.dumps({"fingerprint": digest, "response": response})
     db.add_all(movements)
     await db.flush()
+    costs = {pid: Decimal(str(c or 0)) for pid, c in (await db.execute(select(Product.id, Product.cost_price).where(
+        Product.tenant_id == tenant_id, Product.id.in_([p for p, _ in resolved])))).all()}
+    value = sum((costs.get(pid, Decimal(0)) * item.quantity for pid, item in resolved), Decimal(0))
+    finance_outbox.enqueue_payload(db, tenant_id, dispatch_journal(hashlib.sha1(marker.encode()).hexdigest(), value,
+                                                                  datetime.now(timezone.utc).date(), payload.job_id or ""), value)
     return response

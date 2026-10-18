@@ -90,6 +90,26 @@ export function ProductWizard({ open, product, products, lists, reloadLists, onC
     return saved
   }, [onChanged])
 
+  // Existing drafts save themselves shortly after the last edit, so a supplier or cost change never waits for the Save button.
+  // The server's version only replaces the form when nothing was typed while the request was in flight.
+  const saving = useRef(false)
+  useEffect(() => {
+    if (!open || !dirty || !form.id || form.status === "active" || busy || launching) return
+    const snapshot = form
+    const t = setTimeout(async () => {
+      if (saving.current || !snapshot.name.trim()) return
+      saving.current = true
+      try {
+        const saved = await updateProduct(snapshot.id!, { ...toInput(snapshot), product_number: snapshot.custom_number || undefined, expected_revision: snapshot.revision ?? 1 })
+        if (formRef.current === snapshot) { setForm(fromProduct(saved)); setDirty(false) }
+        else setForm((f) => ({ ...f, revision: saved.revision }))
+        void onChanged()
+      } catch { /* stays "Unsaved changes"; Save draft shows the reason */ }
+      finally { saving.current = false }
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [open, dirty, form, busy, launching, onChanged])
+
   const ensureSaved = useCallback(async () => {
     if (formRef.current.id) return formRef.current.id
     const p = await save()

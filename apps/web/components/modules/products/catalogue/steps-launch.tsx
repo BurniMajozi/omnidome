@@ -56,7 +56,11 @@ export function StepLaunch({ form, setDef, preview, notify }: StepProps) {
   const patch = (p: Partial<Definition["readiness"]>) => setDef({ readiness: { ...r, ...p } })
   const patchIc = (p: Partial<typeof ic>) => patch({ icasa: { ...ic, ...p } })
   const setRoute = (v: string) => patch({ tests_required: v !== "direct", icasa: { ...ic, required: v === "full" } })
-  const updTest = (i: number, p: Partial<TestResult>) => patch({ tests: r.tests.map((t, k) => (k === i ? { ...t, ...p } : t)) })
+  const today = new Date().toISOString().slice(0, 10)
+  const standard = new Set(STANDARD_TESTS[form.nature].map((n) => n.trim().toLowerCase()))
+  const isStandard = (name: string) => standard.has(name.trim().toLowerCase())
+  const updTest = (i: number, p: Partial<TestResult>) =>
+    patch({ tests: r.tests.map((t, k) => (k === i ? { ...t, ...p, date: p.result && p.result !== "Pending" && !t.date ? today : (p.date ?? t.date) } : t)) })
   const updItem = (i: number, p: Partial<IcasaItem>) => patchIc({ items: ic.items.map((t, k) => (k === i ? { ...t, ...p } : t)) })
   const failing = (key: string) => preview?.checks.filter((c) => c.key === key && !c.ok) ?? []
 
@@ -91,13 +95,13 @@ export function StepLaunch({ form, setDef, preview, notify }: StepProps) {
           {r.tests.map((t, i) => (
             <div key={i} className="rounded-lg border border-border bg-card/60 p-3">
               <div className="grid gap-3 sm:grid-cols-4">
-                <Field label="Test" className="sm:col-span-2"><Input value={t.name} onChange={(e) => updTest(i, { name: e.target.value })} className="h-9 text-xs" /></Field>
+                <Field label={isStandard(t.name) ? "Test (standard plan)" : "Test"} className="sm:col-span-2"><Input value={t.name} readOnly={isStandard(t.name)} onChange={(e) => updTest(i, { name: e.target.value })} className="h-9 text-xs" /></Field>
                 <Field label="Result"><select value={t.result} className={selectCls} onChange={(e) => updTest(i, { result: e.target.value as TestResult["result"] })}><option>Pending</option><option>Pass</option><option>Fail</option><option>Waived</option></select></Field>
-                <Field label="Date"><Input type="date" value={t.date} onChange={(e) => updTest(i, { date: e.target.value })} className="h-9 text-xs" /></Field>
+                <Field label="Date" hint={t.date > today ? "A test date cannot be in the future." : undefined}><Input type="date" max={today} value={t.date} onChange={(e) => updTest(i, { date: e.target.value })} className="h-9 text-xs" /></Field>
                 <Field label="Tested by"><Input value={t.tester} onChange={(e) => updTest(i, { tester: e.target.value })} className="h-9 text-xs" /></Field>
                 <Field label="Evidence (file name or link)" className="sm:col-span-2"><Input value={t.evidence} onChange={(e) => updTest(i, { evidence: e.target.value })} className="h-9 text-xs" /></Field>
                 <div className="flex items-end justify-end"><Button type="button" variant="outline" size="sm" className={iconDanger} aria-label="Remove test" onClick={() => patch({ tests: r.tests.filter((_, k) => k !== i) })}><Trash2 className="h-3.5 w-3.5" /></Button></div>
-                <Field label="Notes / reason if waived" className="sm:col-span-4"><textarea rows={2} value={t.notes} onChange={(e) => updTest(i, { notes: e.target.value })} className={areaCls} /></Field>
+                <Field label={t.result === "Waived" || t.result === "Fail" ? "Notes (required for a waived or failed test)" : "Notes"} className="sm:col-span-4"><textarea rows={2} value={t.notes} onChange={(e) => updTest(i, { notes: e.target.value })} className={areaCls} /></Field>
               </div>
             </div>
           ))}
@@ -136,11 +140,17 @@ export function StepLaunch({ form, setDef, preview, notify }: StepProps) {
                         <Field label="Promotion ends"><Input type="date" value={it.promo_end} onChange={(e) => updItem(i, { promo_end: e.target.value })} className="h-9 text-xs" /></Field>
                       </>
                     )}
-                    <Field label="Date lodged with ICASA"><Input type="date" value={it.lodged} onChange={(e) => updItem(i, { lodged: e.target.value })} className="h-9 text-xs" /></Field>
+                    <Field label="Date lodged with ICASA" hint={it.lodged > today ? "Lodged dates are in the past or today. Enter the date you actually sent it." : undefined}><Input type="date" max={today} value={it.lodged} onChange={(e) => updItem(i, { lodged: e.target.value })} className="h-9 text-xs" /></Field>
                     <Field label="Reference / email proof"><Input value={it.ref} placeholder="e.g. sent-mail message ID" onChange={(e) => updItem(i, { ref: e.target.value })} className="h-9 text-xs" /></Field>
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={it.ack} onChange={(e) => updItem(i, { ack: e.target.checked })} /> ICASA acknowledgement received</label>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={it.ack} disabled={!it.lodged} onChange={(e) => updItem(i, { ack: e.target.checked })} /> ICASA acknowledgement received</label>
                   </div>
-                  {earliest && <p className="mt-2 text-[11px] text-muted-foreground">Earliest permitted go-live at {ic.notice} business days: <strong className="text-foreground">{earliest}</strong> (weekends excluded; public holidays not modelled).</p>}
+                  {earliest && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>Earliest permitted go-live at {ic.notice} business days: <strong className="text-foreground">{earliest}</strong> (weekends excluded; public holidays not modelled).</span>
+                      {it.effective !== earliest && <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={() => updItem(i, { effective: earliest })}>Use this as the effective date</Button>}
+                      {it.effective && it.effective < earliest && <span className="text-amber-400">The effective date is before the notice period ends. Edit either date to continue; nothing is locked.</span>}
+                    </div>
+                  )}
                   <details className="mt-2 text-xs">
                     <summary className="cursor-pointer text-primary">Lodgment email draft</summary>
                     <textarea readOnly rows={9} value={lodgmentText(form.name, form.product_number || "[number assigned on save]", d, it)} className={`${areaCls} mt-2 font-mono`} />
@@ -195,6 +205,28 @@ export function StepReview({ form, preview, products, onLaunch, launching, previ
           <div><span className="text-muted-foreground">Enabled fees</span><div className="font-medium text-foreground">{d.fees.filter((f) => f.enabled).length}</div></div>
         </div>
         {d.components.length > 0 && <p className="mt-2 text-[11px] text-muted-foreground">Includes: {d.components.map((c) => `${c.qty} × ${products.find((p) => p.id === c.product_id)?.name ?? "unavailable product"}`).join(", ")}</p>}
+        {preview?.margin_matrix && preview.margin_matrix.suppliers.length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-[11px]">
+              <thead><tr className="text-muted-foreground"><th className="py-1 pr-3 font-normal">Supplier</th><th className="px-2 font-normal">Unit cost</th><th className="px-2 font-normal">Margin</th>{preview.margin_matrix.channels.map((c) => <th key={c.channel} className="px-2 font-normal">{c.channel}</th>)}</tr></thead>
+              <tbody>
+                {preview.margin_matrix.suppliers.map((s) => (
+                  <tr key={s.supplier_id ?? "none"} className="border-t border-border">
+                    <td className="py-1 pr-3 text-foreground">{s.name ?? "No supplier"}{s.preferred ? " ★" : ""}</td>
+                    <td className="px-2">{s.unit_cost === null ? "—" : money(s.unit_cost)}</td>
+                    <td className="px-2">{s.complete && s.margin_pct !== null ? `${s.margin_pct.toFixed(1)}%` : "—"}</td>
+                    {preview.margin_matrix!.channels.map((c) => { const x = s.channels[c.channel]; return <td key={c.channel} className="px-2">{s.complete && x && x.margin_pct !== null ? `${x.margin_pct.toFixed(1)}%` : "—"}</td> })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {(d.barcode.value || d.identifiers.length > 0 || d.provisioning.protocol !== "None") && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {[d.barcode.value && `Barcode ${d.barcode.value}`, d.identifiers.length > 0 && `Captures ${d.identifiers.join(" and ").toLowerCase()} per unit`, d.provisioning.protocol !== "None" && `Provisioned by ${d.provisioning.protocol}${d.provisioning.profile ? ` (${d.provisioning.profile})` : ""}`].filter(Boolean).join(" · ")}
+          </p>
+        )}
         {e && <p className="mt-2 text-[11px] text-muted-foreground">{e.complete ? `${e.horizon}-month contribution ${money(e.profit)} (${e.margin_pct == null ? "N/A" : `${e.margin_pct}%`} margin)` : "Margin not shown: the cost sheet is incomplete."}</p>}
       </div>
 

@@ -167,3 +167,26 @@ def test_index_embeds_once_then_search_finds_the_product_and_delete_tombstones(m
     rep = run(ix.run_source(T, "catalogue_products", full=True))
     assert rep["tombstoned"] == 1
     assert not run(retr.search("home fibre", scope, Filters(source_types=["catalogue_product"]), k=5)).hits
+
+
+def test_identification_and_fee_policies_are_in_the_card_but_commission_is_not():
+    row = fibre_row()
+    row["definition"].update({"barcode": {"value": "2000000000015", "format": "EAN-13", "source": "generated"}, "identifiers": ["Serial number", "MAC address"],
+                              "provisioning": {"protocol": "TR-069", "profile": "ONT-Home-100"},
+                              "fee_policies": [{"policy_id": "p1", "name": "Early termination 24m", "version": 2, "summary": "Recovers the discount and install cost pro rata"}],
+                              "channels": [{"channel": "Field sales", "commission_type": "percent", "value": "12.5"}]})
+    md = BC.catalogue_product_card(row, NAMES, NOW).markdown
+    for needle in ("2000000000015", "Serial number, MAC address", "TR-069", "ONT-Home-100", "Early termination 24m (version 2)", "Recovers the discount"):
+        assert needle in md, needle
+    assert "12.5" not in md and "commission" not in md.lower() and "Field sales" not in md
+
+
+def test_fact_sheet_card_and_source_registration():
+    row = {"id": "a1", "product_id": FIBRE, "product_number": "OD-000201", "product_name": "AX1800 Wi-Fi router", "filename": "ax1800.pdf",
+           "text": "The AX1800 delivers 1800 Mbps over dual bands."}
+    c = BC.catalogue_factsheet_card(row, NOW)
+    assert c.source_type == "catalogue_factsheet" and "1800 Mbps" in c.markdown and "AX1800 Wi-Fi router" in c.title
+    assert any(e.relation == "describes" and e.dst_id == FIBRE for e in c.edges)
+    assert S.SOURCES["catalogue_factsheets"].source_types == ("catalogue_factsheet",)
+    src = open(SC.__file__, encoding="utf-8").read()
+    assert "a.tenant_id = CAST(:tenant_id AS uuid)" in src and "SELECT *" not in src.upper()

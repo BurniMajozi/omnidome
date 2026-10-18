@@ -11,12 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id, get_current_user_id
 from services.inventory import catalogue_rules as rules
+from services.inventory import catalogue_docs as docs
 from services.inventory import catalogue_stock as stock
 from services.inventory.access import require_access, require_tier
 from services.inventory.catalogue_models import (CatalogueAsset, CatalogueEvent, CatalogueList, CatalogueProduct,
@@ -37,11 +40,19 @@ class _Loose(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+def _blank_to_zero(v):
+    """An emptied number box arrives as '' from the browser; that means zero, not a 422 that blocks saving the product."""
+    return 0 if v is None or (isinstance(v, str) and not v.strip()) else v
+
+
+Money = Annotated[Decimal, BeforeValidator(_blank_to_zero)]
+
+
 class Cost(_Loose):
     name: str = ""
     supplier: str = ""
     supplier_id: Optional[str] = None
-    amount: Decimal = Decimal(0)
+    amount: Money = Decimal(0)
     cadence: Literal["Monthly", "Once-off"] = "Monthly"
     auto: bool = False        # maintained by the server from the preferred supplier source
 
@@ -50,7 +61,7 @@ class Source(_Loose):
     """One supplier this product can be bought from."""
     supplier_id: uuid.UUID
     supplier_sku: str = Field("", max_length=80)
-    unit_cost: Decimal = Field(Decimal(0), ge=0, max_digits=12, decimal_places=2)
+    unit_cost: Money = Field(Decimal(0), ge=0, max_digits=12, decimal_places=2)
     cadence: Literal["Monthly", "Once-off"] = "Once-off"     # monthly for services such as wholesale access
     lead_time_days: Optional[int] = Field(None, ge=0, le=365)
     moq: Optional[int] = Field(None, ge=1, le=1_000_000)
@@ -67,7 +78,7 @@ class Fee(_Loose):
     id: str = ""
     name: str
     enabled: bool = False
-    amount: Decimal = Field(Decimal(0), ge=0)
+    amount: Money = Field(Decimal(0), ge=0)
     cadence: Literal["Once-off", "Monthly", "On event"] = "Once-off"
     mode: Literal["Charge", "Included", "Waived"] = "Charge"
     invoice_label: str = ""
@@ -95,6 +106,12 @@ class Competitor(_Loose):
     name: str = ""
     offer: str = ""
     price: Optional[Decimal] = None
+
+    @field_validator("price", mode="before")
+    @classmethod
+    def _blank_price(cls, v):
+        return None if v is None or (isinstance(v, str) and not v.strip()) else v
+
     spec: str = ""
     term: str = ""
     date: str = ""
@@ -172,6 +189,39 @@ class Readiness(_Loose):
     icasa: Icasa = Icasa()
 
 
+class Channel(_Loose):
+    """A way the product is sold, and what a sale through it costs in commission."""
+    channel: str = Field(..., min_length=1, max_length=60)
+    enabled: bool = True
+    commission_type: Literal["none", "percent", "fixed"] = "none"
+    value: Money = Field(Decimal(0), ge=0)
+    basis: Literal["contract", "first_month", "once_off"] = "contract"
+    tier_id: Optional[str] = Field(None, max_length=64)       # the commission tier it was taken from (Admin → commission tiers)
+    tier_name: str = Field("", max_length=100)
+
+
+class FeePolicyRef(_Loose):
+    """A billing fee policy (early termination, claw-back) this product follows, as it was when chosen."""
+    policy_id: str = Field(..., max_length=64)
+    policy_key: Optional[str] = Field(None, max_length=64)
+    version: Optional[int] = None
+    name: str = Field("", max_length=200)
+    summary: str = Field("", max_length=400)
+
+
+class Barcode(_Loose):
+    value: str = Field("", max_length=32)
+    format: Literal["EAN-13", "Code 128", "None"] = "None"
+    source: Literal["generated", "manufacturer", ""] = ""
+
+
+class Provisioning(_Loose):
+    """How a device or connectivity service is provisioned on the network."""
+    protocol: Literal["None", "TR-069", "OMCI", "NETCONF", "SNMP"] = "None"
+    profile: str = Field("", max_length=120)
+    notes: str = Field("", max_length=300)
+
+
 class Definition(_Loose):
     description: str = Field("", max_length=8000)
     customer_name: str = Field("", max_length=200)
@@ -180,7 +230,7 @@ class Definition(_Loose):
     stock: str = "None"
     unit: str = "Each"
     supplier: str = ""
-    price: Decimal = Field(Decimal(0), ge=0)
+    price: Money = Field(Decimal(0), ge=0)
     recurring: bool = True
     term: int = Field(24, ge=1, le=120)
     launch_date: Optional[str] = None
@@ -191,6 +241,11 @@ class Definition(_Loose):
     media: list[Asset] = []
     documents: list[Asset] = []
     policy_refs: list[str] = []
+    fee_policies: list[FeePolicyRef] = Field([], max_length=10)
+    channels: list[Channel] = Field([], max_length=12)
+    identifiers: list[Literal["Serial number", "MAC address"]] = []
+    barcode: Barcode = Barcode()
+    provisioning: Provisioning = Provisioning()
     research: Research = Research()
     readiness: Readiness = Readiness()
 
@@ -255,9 +310,9 @@ def _catalogue_map(rows: list[CatalogueProduct]) -> dict[str, dict]:
     return {str(r.id): _view(r) for r in rows}
 
 
-def _serialise(p: CatalogueProduct, catalogue: dict[str, dict], costs_visible: bool) -> dict:
+def _serialise(p: CatalogueProduct, catalogue: dict[str, dict], costs_visible: bool, names: Optional[dict] = None) -> dict:
     v = _view(p)
-    e = rules.economics(v["id"], catalogue)
+    e = rules.economics(v["id"], catalogue, names=names)
     checks = rules.launch_checks(v, catalogue)
     out = {**v, "created_at": p.created_at, "updated_at": p.updated_at, "launched_at": p.launched_at,
            "inventory_product_id": str(p.inventory_product_id) if p.inventory_product_id else None,
@@ -265,9 +320,16 @@ def _serialise(p: CatalogueProduct, catalogue: dict[str, dict], costs_visible: b
            "cost_complete": e["complete"]}
     if costs_visible:
         out["economics"] = {k: (str(val) if isinstance(val, Decimal) else val) for k, val in e.items()}
+        out["margin_matrix"] = rules.margin_matrix(v["id"], catalogue, names)
     else:
-        out["definition"] = {**out["definition"], "costs": [], "supplier": ""}
+        masked = [{**s, "unit_cost": 0} for s in out["definition"].get("sources") or []]
+        out["definition"] = {**out["definition"], "costs": [], "supplier": "", "sources": masked, "channels": []}
     return out
+
+
+async def _names_all(db, tenant_id: uuid.UUID, rows) -> dict[str, str]:
+    ids = {str(s["supplier_id"]) for r in rows for s in (r.definition or {}).get("sources") or []}
+    return await stock.supplier_names(db, tenant_id, ids)
 
 
 async def _all(db, tenant_id: uuid.UUID) -> list[CatalogueProduct]:
@@ -466,6 +528,7 @@ async def list_products(status: Optional[Status] = None, q: Optional[str] = None
     rows = await _all(db, tenant_id)
     catalogue = _catalogue_map(rows)
     costs = await _can_see_costs(auth)
+    names = await _names_all(db, tenant_id, rows)
     out = []
     for p in sorted(rows, key=lambda r: r.product_number):
         if status and p.status != status:
@@ -476,7 +539,7 @@ async def list_products(status: Optional[Status] = None, q: Optional[str] = None
             continue
         if q and q.lower() not in f"{p.product_number} {p.name}".lower():
             continue
-        out.append(_serialise(p, catalogue, costs))
+        out.append(_serialise(p, catalogue, costs, names))
     return out
 
 
@@ -504,7 +567,7 @@ async def create_product(body: ProductIn, tenant_id: uuid.UUID = Depends(get_cur
     await db.flush()
     await _log(db, tenant_id, p.id, "created", user_id, {"product_number": number})
     await db.refresh(p)
-    return _serialise(p, {**catalogue, str(p.id): _view(p)}, True)
+    return _serialise(p, {**catalogue, str(p.id): _view(p)}, True, await _names_all(db, tenant_id, [*rows, p]))
 
 
 @router.get("/products/{product_id}")
@@ -512,7 +575,7 @@ async def get_product(product_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_
                       auth: AuthContext = Depends(get_auth_context), db=Depends(get_session)):
     p = await _get(db, tenant_id, product_id)
     rows = await _all(db, tenant_id)
-    return _serialise(p, _catalogue_map(rows), await _can_see_costs(auth))
+    return _serialise(p, _catalogue_map(rows), await _can_see_costs(auth), await _names_all(db, tenant_id, rows))
 
 
 @router.patch("/products/{product_id}", dependencies=[Depends(require_tier("write"))])
@@ -564,7 +627,7 @@ async def update_product(product_id: uuid.UUID, body: ProductPatch, tenant_id: u
     await db.flush()
     await _log(db, tenant_id, p.id, "updated", user_id, {"fields": sorted(changes), "revision": p.revision})
     rows = await _all(db, tenant_id)
-    return _serialise(p, _catalogue_map(rows), True)
+    return _serialise(p, _catalogue_map(rows), True, await _names_all(db, tenant_id, rows))
 
 
 @router.get("/products/{product_id}/launch-readiness")
@@ -602,7 +665,7 @@ async def launch_product(product_id: uuid.UUID, body: RevisionBody, tenant_id: u
             for i in (r.get("icasa") or {}).get("items") or []]}})
     await _publish_event(db, tenant_id, p, "product.published", {"effective": effective})
     rows = await _all(db, tenant_id)
-    return _serialise(p, _catalogue_map(rows), True)
+    return _serialise(p, _catalogue_map(rows), True, await _names_all(db, tenant_id, rows))
 
 
 async def _publish_event(db, tenant_id, p: CatalogueProduct, event_type: str, extra: dict) -> None:
@@ -682,8 +745,10 @@ async def preview(body: ProductIn, product_id: Optional[uuid.UUID] = None, tenan
     checks = rules.launch_checks(view, {**catalogue, pid: view})
     out = {"checks": checks, "ready_to_launch": all(c["ok"] for c in checks) and status in ("draft", "in_review")}
     if await _can_see_costs(auth):
-        e = rules.economics(pid, {**catalogue, pid: view})
+        names = await stock.supplier_names(db, tenant_id, {str(s["supplier_id"]) for s in definition.get("sources") or []})
+        e = rules.economics(pid, {**catalogue, pid: view}, names=names)
         out["economics"] = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in e.items()}
+        out["margin_matrix"] = rules.margin_matrix(pid, {**catalogue, pid: view}, names)
     return out
 
 
@@ -721,7 +786,8 @@ def _sniff_ok(ext: str, data: bytes) -> bool:
 
 
 @router.post("/products/{product_id}/assets", status_code=201, dependencies=[Depends(require_tier("write"))])
-async def upload_asset(product_id: uuid.UUID, request: Request, filename: str, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+async def upload_asset(product_id: uuid.UUID, request: Request, filename: str, purpose: Optional[Literal["fact_sheet"]] = None,
+                       tenant_id: uuid.UUID = Depends(get_current_tenant_id),
                        user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
     """Raw-body upload (Content-Length bounded) so no multipart dependency is needed: POST bytes with ?filename=."""
     await _get(db, tenant_id, product_id)
@@ -746,12 +812,21 @@ async def upload_asset(product_id: uuid.UUID, request: Request, filename: str, t
     if n >= MAX_ASSETS_PER_PRODUCT:
         raise HTTPException(409, f"A product can hold at most {MAX_ASSETS_PER_PRODUCT} files")
     kind = "3D" if ext in MODEL_TYPES else "Image" if ext in IMAGE_TYPES else "Document"
-    a = CatalogueAsset(tenant_id=tenant_id, product_id=product_id, filename=clean, content_type=ALLOWED_TYPES[ext], size=len(data), data=data)
+    text = None
+    if purpose == "fact_sheet":
+        if ext not in ("pdf", "docx", "txt"):
+            raise HTTPException(415, "A fact sheet must be a PDF, DOCX or TXT file")
+        try:
+            text = docs.extract_text(ext, data)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+    a = CatalogueAsset(tenant_id=tenant_id, product_id=product_id, filename=clean, content_type=ALLOWED_TYPES[ext], size=len(data), data=data,
+                       purpose=purpose, text=text)
     db.add(a)
     await db.flush()
-    await _log(db, tenant_id, product_id, "asset_added", user_id, {"filename": clean, "size": len(data)})
+    await _log(db, tenant_id, product_id, "asset_added", user_id, {"filename": clean, "size": len(data), "purpose": purpose})
     return {"id": str(a.id), "name": clean, "kind": kind, "extension": ext, "size": len(data),
-            "url": f"/svc/inventory/catalogue/assets/{a.id}"}
+            "url": f"/svc/inventory/catalogue/assets/{a.id}", "text_chars": len(text) if text else None}
 
 
 @router.get("/assets/{asset_id}")
@@ -793,21 +868,138 @@ async def link_to_stock(product_id: uuid.UUID, tenant_id: uuid.UUID = Depends(ge
 
 @router.get("/purchasable-products")
 async def purchasable_products(supplier_id: Optional[uuid.UUID] = None, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-                               db=Depends(get_session)):
+                               auth: AuthContext = Depends(get_auth_context), db=Depends(get_session)):
     """Active, stock-tracked catalogue products the buyer can order, each with its supplier sources.
 
     With ``supplier_id`` the product's price and lead time from that supplier are returned as ``offer`` (null when the
     supplier is not a listed source: the buyer sees the product but is told it is not sourced from them)."""
-    rows = [r for r in await _all(db, tenant_id) if r.status == "active" and stock.is_stockable(r.nature, r.definition or {})]
+    everything = await _all(db, tenant_id)
+    catalogue = _catalogue_map(everything)
+    rows = [r for r in everything if r.status == "active" and stock.is_stockable(r.nature, r.definition or {})]
     names = await stock.supplier_names(db, tenant_id, {str(s["supplier_id"]) for r in rows for s in (r.definition or {}).get("sources") or []})
+    see_margins = await _can_see_costs(auth)
     out = []
     for r in sorted(rows, key=lambda x: x.product_number):
         if not r.inventory_product_id:
             await stock.ensure_stock_item(db, tenant_id, r)      # launched before the link existed
-        sources = [{**s, "supplier_name": names.get(str(s["supplier_id"]), "")} for s in (r.definition or {}).get("sources") or []]
+        matrix = {m["supplier_id"]: m for m in rules.margin_matrix(str(r.id), catalogue, names)["suppliers"]} if see_margins else {}
+        sources = [{**s, "supplier_name": names.get(str(s["supplier_id"]), ""),
+                    **({"margin_pct": matrix[str(s["supplier_id"])]["margin_pct"], "profit": matrix[str(s["supplier_id"])]["profit"],
+                        "sell_price": float(Decimal(str((r.definition or {}).get("price") or 0)))} if str(s["supplier_id"]) in matrix else {})}
+                   for s in (r.definition or {}).get("sources") or []]
         offer = next((s for s in sources if supplier_id and str(s["supplier_id"]) == str(supplier_id)), None)
         out.append({"catalogue_product_id": str(r.id), "inventory_product_id": str(r.inventory_product_id) if r.inventory_product_id else None,
                     "product_number": r.product_number, "name": r.name, "unit": (r.definition or {}).get("unit", "Each"),
                     "stock": (r.definition or {}).get("stock"), "sources": sources, "offer": offer,
+                    "identifiers": sorted({*((r.definition or {}).get("identifiers") or []), *(["Serial number"] if (r.definition or {}).get("stock") == "Serial number" else [])}),
+                    "barcode": ((r.definition or {}).get("barcode") or {}).get("value") or None,
                     "preferred": next((s for s in sources if s.get("preferred")), None)})
     return [x for x in out if x["inventory_product_id"]]
+
+
+# ── barcode ──────────────────────────────────────────────────────────────────
+
+async def _barcode_taken(db, tenant_id: uuid.UUID, value: str, exclude: Optional[uuid.UUID] = None) -> bool:
+    for r in await _all(db, tenant_id):
+        if exclude and r.id == exclude:
+            continue
+        if ((r.definition or {}).get("barcode") or {}).get("value") == value:
+            return True
+    return False
+
+
+class BarcodeIn(BaseModel):
+    mode: Literal["generate", "manufacturer", "clear"]
+    value: Optional[str] = Field(None, max_length=32)
+
+
+@router.post("/products/{product_id}/barcode", dependencies=[Depends(require_tier("write"))])
+async def set_barcode(product_id: uuid.UUID, body: BarcodeIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                      user_id: uuid.UUID = Depends(get_current_user_id), db=Depends(get_session)):
+    """Generate an internal EAN-13 (prefix 2 = in-store use, no GS1 licence needed), record the manufacturer's code, or clear it.
+
+    Physical items only. The barcode is linked to the stock item, so scanners find the product."""
+    p = await _get(db, tenant_id, product_id)
+    if p.nature != "Physical item":
+        raise HTTPException(409, "Only physical items have a barcode")
+    d = dict(p.definition or {})
+    if body.mode == "clear":
+        d["barcode"] = {"value": "", "format": "None", "source": ""}
+    elif body.mode == "generate":
+        value = None
+        for _ in range(20):
+            n = int(( await next_sequence_number(db, tenant_id, "barcode", "BC")).rsplit("-", 1)[1])
+            first12 = f"2{n:011d}"[:12]
+            candidate = first12 + str(rules.ean13_check_digit(first12))
+            if not await _barcode_taken(db, tenant_id, candidate, p.id):
+                value = candidate
+                break
+        if value is None:
+            raise HTTPException(503, "Could not allocate a barcode")
+        d["barcode"] = {"value": value, "format": "EAN-13", "source": "generated"}
+    else:
+        v = (body.value or "").strip()
+        if not v:
+            raise HTTPException(422, "Enter the manufacturer's barcode")
+        fmt = "EAN-13" if len(v) == 13 and v.isdigit() else "Code 128"
+        if fmt == "EAN-13" and not rules.ean13_valid(v):
+            raise HTTPException(422, "That EAN-13 has an invalid check digit. Check the number on the packaging.")
+        if fmt == "Code 128" and not (4 <= len(v) <= 32 and v.isascii() and v.isprintable()):
+            raise HTTPException(422, "Barcodes must be 4-32 printable characters")
+        if await _barcode_taken(db, tenant_id, v, p.id):
+            raise HTTPException(409, "Another product already uses this barcode")
+        d["barcode"] = {"value": v, "format": fmt, "source": "manufacturer"}
+    p.definition = d
+    p.revision += 1
+    await db.flush()
+    if p.inventory_product_id:
+        await stock.ensure_stock_item(db, tenant_id, p)
+    await _log(db, tenant_id, p.id, "barcode_" + body.mode, user_id, {"barcode": d["barcode"]["value"]})
+    rows = await _all(db, tenant_id)
+    return _serialise(p, _catalogue_map(rows), True, await _names_all(db, tenant_id, rows))
+
+
+# ── AI-assisted description from the fact sheets ─────────────────────────────
+
+class DraftIn(BaseModel):
+    style: Literal["Customer-friendly", "Technical summary", "Short portal description"] = "Customer-friendly"
+    product: ProductIn
+
+
+@router.post("/products/{product_id}/description-suggestions", dependencies=[Depends(require_tier("write"))])
+async def suggest_description(product_id: uuid.UUID, body: DraftIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    """Draft a description from this product's uploaded fact sheets and the details entered so far. Never saves anything."""
+    await _get(db, tenant_id, product_id)
+    sheets = list((await db.execute(select(CatalogueAsset).where(
+        CatalogueAsset.tenant_id == tenant_id, CatalogueAsset.product_id == product_id, CatalogueAsset.purpose == "fact_sheet",
+        CatalogueAsset.text.is_not(None)).order_by(CatalogueAsset.created_at))).scalars())
+    if not sheets:
+        raise HTTPException(409, "Upload a fact sheet first (PDF, DOCX or TXT), then draft from it")
+    text = "\n\n".join(f"[{s.filename}]\n{s.text}" for s in sheets)[:40_000]
+    view = {"name": body.product.name, "nature": body.product.nature, "family": body.product.family, "range": body.product.range,
+            "definition": body.product.definition.model_dump(mode="json")}
+    name = body.product.definition.customer_name or body.product.name
+    result = await docs.llm_draft(docs.product_facts(view), text, body.style)
+    if result:
+        draft, model = result
+        return {"text": draft, "method": "ai", "model": model, "sheets": [s.filename for s in sheets]}
+    return {"text": docs.extractive_draft(name, text, body.style), "method": "extract", "model": None, "sheets": [s.filename for s in sheets],
+            "note": "No language model answered, so this draft is built from sentences in your fact sheet. Review and edit it."}
+
+
+# ── unit register (serial numbers and MAC addresses of received units) ───────
+
+@router.get("/unit-register")
+async def unit_register(product_id: Optional[uuid.UUID] = None, serial: Optional[str] = None, mac: Optional[str] = None,
+                        limit: int = Query(100, ge=1, le=500), tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    from services.inventory.catalogue_models import InventoryUnit
+    q = select(InventoryUnit).where(InventoryUnit.tenant_id == tenant_id)
+    if product_id:
+        q = q.where(InventoryUnit.product_id == product_id)
+    if serial:
+        q = q.where(func.lower(InventoryUnit.serial) == serial.strip().lower())
+    if mac:
+        q = q.where(InventoryUnit.mac == stock.normalise_mac(mac))
+    rows = (await db.execute(q.order_by(InventoryUnit.created_at.desc()).limit(limit))).scalars()
+    return [{"id": str(u.id), "product_id": str(u.product_id), "serial": u.serial, "mac": u.mac, "status": u.status,
+             "gr_id": str(u.gr_id) if u.gr_id else None, "created_at": u.created_at} for u in rows]

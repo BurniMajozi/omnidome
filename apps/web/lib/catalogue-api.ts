@@ -50,13 +50,20 @@ async function request<T>(base: string, path: string, init?: RequestInit & { jso
     } catch {
       detail = undefined
     }
+    const field = (loc: unknown) =>
+      Array.isArray(loc)
+        ? loc.filter((x) => typeof x === "string" && !["body", "definition", "product"].includes(x)).join(" › ").replace(/_/g, " ")
+        : ""
     const message =
       typeof detail === "string"
         ? detail
         : detail && typeof detail === "object" && "message" in detail
           ? String((detail as { message: unknown }).message)
           : Array.isArray(detail)
-            ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join("; ")
+            ? detail
+                .map((d: { msg?: string; loc?: unknown }) => (d.msg ? `${field(d.loc) ? `${field(d.loc)}: ` : ""}${d.msg}` : ""))
+                .filter(Boolean)
+                .join("; ")
             : `Request failed (${res.status})`
     throw new CatalogueError(res.status, message, detail)
   }
@@ -67,6 +74,8 @@ async function request<T>(base: string, path: string, init?: RequestInit & { jso
 const call = <T>(path: string, init?: RequestInit & { json?: unknown }) => request<T>(API_BASE, path, init)
 /** Any inventory-service route (suppliers, stock, purchasing, performance), with the same auth and error handling. */
 export const inventoryCall = <T>(path: string, init?: RequestInit & { json?: unknown }) => request<T>("/svc/inventory", path, init)
+/** Billing service (fee policies). */
+export const billingCall = <T>(path: string, init?: RequestInit & { json?: unknown }) => request<T>("/svc/billing", path, init)
 
 // ── types (mirror services/inventory/routes/catalogue.py) ───────────────────
 
@@ -131,6 +140,35 @@ export interface MarketResearch {
   findings: ResearchFinding[]
   sources: ResearchSourceRef[]
 }
+export interface Channel {
+  channel: string
+  enabled: boolean
+  commission_type: "none" | "percent" | "fixed"
+  value: number | string
+  basis: "contract" | "first_month" | "once_off"
+  tier_id?: string | null
+  tier_name: string
+}
+export interface FeePolicyRef { policy_id: string; policy_key?: string | null; version?: number | null; name: string; summary: string }
+export interface Barcode { value: string; format: "EAN-13" | "Code 128" | "None"; source: "generated" | "manufacturer" | "" }
+export interface Provisioning { protocol: "None" | "TR-069" | "OMCI" | "NETCONF" | "SNMP"; profile: string; notes: string }
+export interface MarginRow {
+  supplier_id: string | null
+  name: string | null
+  preferred: boolean
+  unit_cost: number | null
+  cadence: string | null
+  complete: boolean
+  revenue: number
+  cost: number
+  profit: number
+  margin_pct: number | null
+  channels: Record<string, { commission: number; profit: number; margin_pct: number | null }>
+}
+export interface MarginMatrix {
+  channels: { channel: string; commission_type: string; value: number; basis: string; tier_name: string }[]
+  suppliers: MarginRow[]
+}
 export interface Competitor { name: string; offer: string; price: number | string | null; spec: string; term: string; date: string; source: string }
 export interface TestResult { name: string; result: "Pending" | "Pass" | "Fail" | "Waived"; tester: string; date: string; notes: string; evidence: string }
 export interface IcasaItem {
@@ -164,6 +202,11 @@ export interface Definition {
   media: Asset[]
   documents: Asset[]
   policy_refs: string[]
+  fee_policies: FeePolicyRef[]
+  channels: Channel[]
+  identifiers: ("Serial number" | "MAC address")[]
+  barcode: Barcode
+  provisioning: Provisioning
   research: { rows: Competitor[]; kpis: string[]; market?: MarketResearch | null }
   readiness: {
     tests_required: boolean
@@ -204,6 +247,7 @@ export interface Product {
   ready_to_launch: boolean
   cost_complete: boolean
   economics?: Economics
+  margin_matrix?: MarginMatrix
 }
 export interface ProductInput {
   name: string
@@ -242,8 +286,13 @@ export const archiveProduct = (id: string, expected_revision: number) =>
   call<{ status: string }>(`/products/${id}/archive`, { method: "POST", json: { expected_revision } })
 export const productHistory = (id: string) => call<HistoryEvent[]>(`/products/${id}/history`)
 export const previewProduct = (body: ProductInput, productId?: string) =>
-  call<{ checks: Check[]; ready_to_launch: boolean; economics?: Economics }>(`/preview${productId ? `?product_id=${productId}` : ""}`, { method: "POST", json: body })
+  call<{ checks: Check[]; ready_to_launch: boolean; economics?: Economics; margin_matrix?: MarginMatrix }>(`/preview${productId ? `?product_id=${productId}` : ""}`, { method: "POST", json: body })
 
+export const setBarcode = (id: string, b: { mode: "generate" | "manufacturer" | "clear"; value?: string }) =>
+  call<Product>(`/products/${id}/barcode`, { method: "POST", json: b })
+export interface DescriptionDraft { text: string; method: "ai" | "extract"; model: string | null; sheets: string[]; note?: string }
+export const suggestDescription = (id: string, style: string, product: ProductInput) =>
+  call<DescriptionDraft>(`/products/${id}/description-suggestions`, { method: "POST", json: { style, product } })
 export const getLists = () => call<Lists>("/lists")
 export const addListValue = (kind: "category" | "range" | "family", name: string, parent = "") =>
   call<{ id: string }>("/lists", { method: "POST", json: { kind, name, parent } })
@@ -251,8 +300,8 @@ export const renameListValue = (id: string, name: string) => call<{ updated_prod
 export const deleteListValue = (id: string) => call<{ deleted: boolean }>(`/lists/${id}`, { method: "DELETE" })
 
 /** Upload raw bytes (the server validates type, magic bytes and size). Returns the asset metadata. */
-export async function uploadAsset(productId: string, file: File): Promise<Pick<Asset, "id" | "name" | "kind" | "extension" | "size" | "url">> {
-  return call(`/products/${productId}/assets?filename=${encodeURIComponent(file.name)}`, {
+export async function uploadAsset(productId: string, file: File, purpose?: "fact_sheet"): Promise<Pick<Asset, "id" | "name" | "kind" | "extension" | "size" | "url"> & { text_chars?: number | null }> {
+  return call(`/products/${productId}/assets?filename=${encodeURIComponent(file.name)}${purpose ? `&purpose=${purpose}` : ""}`, {
     method: "POST",
     body: file,
     headers: { "Content-Type": "application/octet-stream" },
@@ -288,6 +337,7 @@ export function blankDefinition(): Definition {
   return {
     description: "", customer_name: "", down: null, up: null, stock: "None", unit: "Each", supplier: "", price: 0, recurring: true,
     term: 24, launch_date: null, costs: [], sources: [], components: [], fees: [], media: [], documents: [], policy_refs: [],
+    fee_policies: [], channels: [], identifiers: [], barcode: { value: "", format: "None", source: "" }, provisioning: { protocol: "None", profile: "", notes: "" },
     research: { rows: [], kpis: [] },
     readiness: { tests_required: true, tests_exempt_reason: "", tests: [], icasa: { required: null, exempt_reason: "", notice: 7, items: [] } },
   }

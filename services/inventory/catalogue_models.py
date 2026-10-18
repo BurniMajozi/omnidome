@@ -8,7 +8,7 @@ Portable column types keep the API testable on SQLite while using JSONB/UUID on 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, LargeBinary, String, UniqueConstraint, Uuid, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -95,6 +95,8 @@ class CatalogueAsset(Base):
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    purpose: Mapped[str | None] = mapped_column(String(20), nullable=True)     # fact_sheet | None
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)               # extracted text of a fact sheet
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -134,4 +136,24 @@ class SupplierEvaluation(Base):
     late_reason: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     comment: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     evaluated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class InventoryUnit(Base):
+    """One physical unit received: its serial number and (for network devices) MAC address. The unit register."""
+    __tablename__ = "inventory_units"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "product_id", "serial", name="uq_unit_serial"),
+        UniqueConstraint("tenant_id", "mac", name="uq_unit_mac"),
+        Index("ix_units_product", "tenant_id", "product_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)           # inventory_products.id
+    gr_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    serial: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mac: Mapped[str | None] = mapped_column(String(17), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="in_stock")   # in_stock | issued | returned | scrapped
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
