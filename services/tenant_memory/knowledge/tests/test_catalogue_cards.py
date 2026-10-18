@@ -190,3 +190,12 @@ def test_fact_sheet_card_and_source_registration():
     assert S.SOURCES["catalogue_factsheets"].source_types == ("catalogue_factsheet",)
     src = open(SC.__file__, encoding="utf-8").read()
     assert "a.tenant_id = CAST(:tenant_id AS uuid)" in src and "SELECT *" not in src.upper()
+
+
+def test_not_sold_products_say_so_without_amortisation_or_rent():
+    row = fibre_row()
+    row["definition"].update({"price": 0, "offer": {"mode": "given", "returnable": True, "life_months": 36, "residual_value": "120", "rental_monthly": "99"}})
+    md = BC.catalogue_product_card(row, NAMES, NOW).markdown
+    assert "not sold: given to the customer and returned when they leave" in md
+    for forbidden in ("36", "120", "99", "amortis"):
+        assert forbidden not in md, forbidden

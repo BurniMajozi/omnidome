@@ -140,6 +140,14 @@ export interface MarketResearch {
   findings: ResearchFinding[]
   sources: ResearchSourceRef[]
 }
+export type OfferMode = "sold" | "given" | "asset" | "rented_in"
+export interface Offer {
+  mode: OfferMode
+  returnable: boolean
+  life_months: number
+  residual_value: number | string
+  rental_monthly: number | string
+}
 export interface Channel {
   channel: string
   enabled: boolean
@@ -207,6 +215,7 @@ export interface Definition {
   identifiers: ("Serial number" | "MAC address")[]
   barcode: Barcode
   provisioning: Provisioning
+  offer: Offer
   research: { rows: Competitor[]; kpis: string[]; market?: MarketResearch | null }
   readiness: {
     tests_required: boolean
@@ -217,6 +226,8 @@ export interface Definition {
 }
 export interface Check { key: string; label: string; ok: boolean; detail: string }
 export interface Economics {
+  amortisation_monthly?: string
+  amortisation_yearly?: string
   complete: boolean
   monthly: string
   upfront: string
@@ -338,6 +349,7 @@ export function blankDefinition(): Definition {
     description: "", customer_name: "", down: null, up: null, stock: "None", unit: "Each", supplier: "", price: 0, recurring: true,
     term: 24, launch_date: null, costs: [], sources: [], components: [], fees: [], media: [], documents: [], policy_refs: [],
     fee_policies: [], channels: [], identifiers: [], barcode: { value: "", format: "None", source: "" }, provisioning: { protocol: "None", profile: "", notes: "" },
+    offer: { mode: "sold", returnable: false, life_months: 0, residual_value: 0, rental_monthly: 0 },
     research: { rows: [], kpis: [] },
     readiness: { tests_required: true, tests_exempt_reason: "", tests: [], icasa: { required: null, exempt_reason: "", notice: 7, items: [] } },
   }

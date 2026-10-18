@@ -1,3 +1,4 @@
+import { blankDefinition } from "@/lib/catalogue-api"
 import type { Check, Definition, Economics, Lists, MarginMatrix, Nature, Product, ProductInput, Status, Usage } from "@/lib/catalogue-api"
 
 export interface Form {
@@ -46,7 +47,7 @@ export function fromProduct(p: Product): Form {
   return {
     id: p.id, revision: p.revision, status: p.status, product_number: p.product_number, custom_number: "", name: p.name,
     category: p.category, range: p.range, family: p.family, nature: p.nature, usage: p.usage, owner: p.owner,
-    definition: structuredClone(p.definition),
+    definition: { ...blankDefinition(), ...structuredClone(p.definition) },
   }
 }
 

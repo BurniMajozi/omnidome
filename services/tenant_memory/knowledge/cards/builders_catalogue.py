@@ -21,6 +21,10 @@ LIFECYCLE = {"draft": "Draft (in development)", "in_review": "In review", "activ
 
 
 def _price(d: dict) -> str:
+    mode = (d.get("offer") or {}).get("mode") or "sold"
+    if mode != "sold":       # mode only; amortisation, rent and residual values are costs and are never indexed
+        return {"given": "not sold: given to the customer" + (" and returned when they leave" if (d.get("offer") or {}).get("returnable") else ""),
+                "asset": "not sold: company asset", "rented_in": "not sold: rented from its owner"}.get(mode, "not sold")
     try:
         p = float(d.get("price") or 0)
     except (TypeError, ValueError):

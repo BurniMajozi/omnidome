@@ -5,7 +5,7 @@ import { Eye, Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { adminApi, type CommissionTier } from "@/lib/admin-api"
-import { billingCall, type Channel, type Fee, type FeePolicyRef, type Product } from "@/lib/catalogue-api"
+import { billingCall, type Channel, type Fee, type FeePolicyRef, type OfferMode, type Product } from "@/lib/catalogue-api"
 import { AuthImage, Field, FEE_NAMES, money, primaryImage, selectCls } from "./shared"
 import type { StepProps } from "./wizard-types"
 
@@ -70,7 +70,89 @@ export function StepIncluded({ form, setDef, products, onView }: StepProps) {
 
 // ── Step 4: price and customer fees ──────────────────────────────────────────
 
-export function StepPricing({ form, setDef, preview }: StepProps) {
+const MODES: { key: OfferMode; title: string; text: string }[] = [
+  { key: "sold", title: "Sold to the customer", text: "Has a selling price and may carry fees and commission." },
+  { key: "given", title: "Given or lent to the customer", text: "Free to them (e.g. a router), usually tied to a service. Its cost lands on the services that include it." },
+  { key: "asset", title: "Company asset", text: "Used by the business, never sold or given: furniture, tools, stationery, vehicles." },
+  { key: "rented_in", title: "Rented from someone else", text: "We pay a monthly rent to the owner instead of buying it." },
+]
+
+function OfferPanel({ form, setDef, preview }: Pick<StepProps, "form" | "setDef" | "preview">) {
+  const d = form.definition
+  const o = d.offer
+  const e = preview?.economics
+  const patch = (p: Partial<typeof o>) => setDef({ offer: { ...o, ...p } })
+  const setMode = (mode: OfferMode) => {
+    const notSold = mode !== "sold"
+    setDef({
+      offer: { ...o, mode, returnable: mode === "given" ? o.returnable : false },
+      recurring: notSold ? false : d.recurring,
+      // internal items have no market to test against and no tariff to lodge; they can be switched back on in the launch step
+      readiness: notSold ? { ...d.readiness, tests_required: false, icasa: { ...d.readiness.icasa, required: false } } : d.readiness,
+    })
+  }
+  const yearly = e?.amortisation_yearly !== undefined ? Number(e.amortisation_yearly) : null
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">How is this product offered?</h3>
+        <p className="mt-1 text-xs text-muted-foreground">Not everything is sold. Pick what this item is and the journey asks only what applies.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="How the product is offered">
+        {MODES.map((m) => (
+          <label key={m.key} className={`cursor-pointer rounded-lg border p-3 text-xs ${o.mode === m.key ? "border-primary bg-primary/10" : "border-border"}`}>
+            <input type="radio" name="offer-mode" className="mr-2" checked={o.mode === m.key} onChange={() => setMode(m.key)} />
+            <strong className="text-foreground">{m.title}</strong>
+            <div className="mt-1 text-muted-foreground">{m.text}</div>
+          </label>
+        ))}
+      </div>
+      {o.mode !== "sold" && (
+        <div className="space-y-4 rounded-lg border border-border p-4">
+          {o.mode === "rented_in" ? (
+            <Field label="Monthly rent paid to the owner (R, ex tax)"><Input type="number" min={0} step="0.01" value={o.rental_monthly} onChange={(ev) => patch({ rental_monthly: ev.target.value })} className="h-9 text-xs" /></Field>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Amortise over (months)" hint="0 means it is not amortised: the whole cost is charged when it is handed over (or recovered if returned).">
+                  <Input type="number" min={0} max={600} value={o.life_months} onChange={(ev) => patch({ life_months: Math.max(0, Math.floor(Number(ev.target.value)) || 0) })} className="h-9 text-xs" />
+                </Field>
+                <Field label="Expected resale or returned value at the end (R)" hint="What it is still worth when its life is over, or when the customer brings it back.">
+                  <Input type="number" min={0} step="0.01" value={o.residual_value} onChange={(ev) => patch({ residual_value: ev.target.value })} className="h-9 text-xs" />
+                </Field>
+              </div>
+              {o.mode === "given" && (
+                <label className="flex items-center gap-2 text-xs text-foreground"><input type="checkbox" checked={o.returnable} onChange={(ev) => patch({ returnable: ev.target.checked })} /> The customer must return it when they leave (stock comes back in)</label>
+              )}
+            </>
+          )}
+          <div className="rounded-md border border-border bg-card/60 p-3 text-xs">
+            {o.mode === "rented_in" ? (
+              <div className="flex justify-between"><span className="text-muted-foreground">Rent per year</span><strong>{money(Number(o.rental_monthly || 0) * 12)}</strong></div>
+            ) : o.life_months > 0 ? (
+              <>
+                <div className="flex justify-between"><span className="text-muted-foreground">Amortisation per month</span><strong>{e?.amortisation_monthly !== undefined ? money(e.amortisation_monthly) : "Set the purchase cost in Suppliers and costs"}</strong></div>
+                <div className="mt-1 flex justify-between"><span className="text-muted-foreground">Amortisation per year</span><strong>{yearly !== null ? money(yearly) : "—"}</strong></div>
+              </>
+            ) : (
+              <p className="text-muted-foreground">No amortisation: {o.mode === "asset" ? "the purchase is treated as a one-off cost." : o.returnable ? "the cost is recovered by the value you expect back." : "the full cost is charged to the services that include it."}</p>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            No selling price is needed. {o.mode === "given" ? "Include this product in the service it comes with (Included products step on that service) and its cost is added to that service's margin automatically." : "The cost sheet and amortisation are what the business tracks."}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function StepPricing(props: StepProps) {
+  if (props.form.definition.offer.mode !== "sold") return <div className="space-y-5"><OfferPanel form={props.form} setDef={props.setDef} preview={props.preview} /></div>
+  return <SoldPricing {...props} />
+}
+
+function SoldPricing({ form, setDef, preview }: StepProps) {
   const d = form.definition
   const [pick, setPick] = useState("")
   const [custom, setCustom] = useState("")
@@ -99,6 +181,7 @@ export function StepPricing({ form, setDef, preview }: StepProps) {
     setDef({ fee_policies: on ? [...d.fee_policies, { policy_id: p.id, policy_key: p.policy_key ?? null, version: p.version ?? null, name: p.name, summary: p.description ?? "" }] : d.fee_policies.filter((x) => x.policy_id !== p.id) })
   return (
     <div className="space-y-5">
+      <OfferPanel form={form} setDef={setDef} preview={preview} />
       <div>
         <h3 className="text-sm font-semibold text-foreground">How will customers pay?</h3>
         <p className="mt-1 text-xs text-muted-foreground">Use a consistent price and cost basis. Amounts are in ZAR excluding tax.</p>

@@ -174,7 +174,12 @@ export function StepDefinition({ form, set, setDef, products, lists, reloadLists
           </select>
         </Field>
         <Field label="Primary usage">
-          <select value={form.usage} disabled={locked} className={selectCls} onChange={(e) => set({ usage: e.target.value as Usage })}>
+          <select value={form.usage} disabled={locked} className={selectCls} onChange={(e) => {
+            const usage = e.target.value as Usage
+            set({ usage })
+            // a company asset is not sold: start it on the asset route (the pricing step lets you change it)
+            if (usage === "Company-owned asset" && d.offer.mode === "sold") setDef({ offer: { ...d.offer, mode: "asset" }, recurring: false, readiness: { ...d.readiness, tests_required: false, icasa: { ...d.readiness.icasa, required: false } } })
+          }}>
             <option>Customer-facing</option><option>Internal consumable</option><option>Company-owned asset</option>
           </select>
         </Field>

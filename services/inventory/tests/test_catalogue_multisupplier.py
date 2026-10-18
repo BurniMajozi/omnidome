@@ -314,3 +314,73 @@ def test_unit_validation_serial_mac_counts_and_duplicates():
             assert await stock.validate_units(s, tenant, uuid.uuid4(), 3, []) == []
         await engine.dispose()
     _run(case())
+
+
+# ── products that are not sold: giveaways, company assets, rented-in kit ────────
+
+def _view(pid, d, usage="Company-owned asset", status="active"):
+    return {"id": pid, "name": "x", "category": "c", "range": "r", "family": "f", "nature": "Physical item", "usage": usage,
+            "status": status, "definition": d}
+
+
+def _asset(offer, cost=1200):
+    return {"description": "d", "price": 0, "recurring": False, "stock": "Quantity", "offer": offer,
+            "costs": [{"name": "Purchase", "supplier": "ACME", "amount": cost, "cadence": "Once-off"}]}
+
+
+def test_company_asset_is_amortised_and_never_has_revenue():
+    from decimal import Decimal
+    from services.inventory import catalogue_rules as rules
+    cat = {"a": _view("a", _asset({"mode": "asset", "life_months": 36, "residual_value": 120}))}
+    e = rules.economics("a", cat)
+    assert e["revenue"] == 0 and e["margin_pct"] is None
+    assert e["monthly"] == Decimal(1080) / 36 == Decimal(30) and e["upfront"] == 0
+    assert e["amortisation_yearly"] == Decimal(360)
+
+
+def test_given_router_cost_lands_on_the_service_that_includes_it():
+    from decimal import Decimal
+    from services.inventory import catalogue_rules as rules
+    router = _view("r", _asset({"mode": "given", "life_months": 36, "residual_value": 0, "returnable": True}, cost=900))
+    svc = _view("s", {"description": "d", "price": 500, "recurring": True, "term": 24, "components": [{"product_id": "r", "qty": 1}],
+                      "costs": [{"name": "Wholesale", "supplier": "W", "amount": 200, "cadence": "Monthly"}]}, usage="Customer-facing")
+    e = rules.economics("s", {"r": router, "s": svc})
+    assert e["monthly"] == Decimal(200) + Decimal(25)                 # 900 over 36 months = 25 a month on top of the wholesale cost
+    assert e["profit"] == (500 - 225) * 24
+    plain = rules.economics("s", {"r": _view("r", {**router["definition"], "offer": {"mode": "given"}}), "s": svc})
+    assert plain["upfront"] == 900                                    # given away with no life: the whole cost hits the service
+
+
+def test_returnable_giveaway_without_life_recovers_its_residual():
+    from services.inventory import catalogue_rules as rules
+    e = rules.economics("a", {"a": _view("a", _asset({"mode": "given", "returnable": True, "residual_value": 200}))})
+    assert e["upfront"] == 1000
+
+
+def test_rented_in_uses_monthly_rent_and_launch_gate_does_not_ask_for_a_price():
+    from services.inventory import catalogue_rules as rules
+    d = _asset({"mode": "rented_in", "rental_monthly": 150}, cost=0)
+    d["costs"] = [{"name": "Deposit", "supplier": "Lessor", "amount": 300, "cadence": "Once-off"}]
+    e = rules.economics("a", {"a": _view("a", d)})
+    assert e["monthly"] == 150 and e["upfront"] == 300
+    checks = {c["key"]: c for c in rules.launch_checks(_view("a", {**d, "readiness": {"tests_required": False}}, status="draft"), {})}
+    assert checks["price"]["ok"] and checks["testing"]["ok"] and checks["icasa"]["ok"]
+    no_rent = rules.launch_checks(_view("a", _asset({"mode": "rented_in"}), status="draft"), {})
+    assert not next(c for c in no_rent if c["key"] == "price")["ok"]
+
+
+def test_a_plain_chair_can_launch_without_price_tests_or_icasa():
+    from services.inventory import catalogue_rules as rules
+    d = {**_asset({"mode": "asset"}, cost=450), "readiness": {"tests_required": False}}
+    d["description"] = "Office chair"
+    p = {**_view("c", d, status="draft"), "name": "Office chair", "category": "Office", "range": "Furniture", "family": "Assets"}
+    p["definition"]["costs"][0]["supplier"] = "Makro"
+    failing = [c["key"] for c in rules.launch_checks(p, {}) if not c["ok"]]
+    assert failing == [], failing
+
+
+def test_sold_products_are_unchanged():
+    from services.inventory import catalogue_rules as rules
+    d = {"description": "d", "price": 100, "recurring": False, "costs": [{"name": "c", "supplier": "s", "amount": 40, "cadence": "Once-off"}]}
+    e = rules.economics("a", {"a": _view("a", d, usage="Customer-facing")})
+    assert e["profit"] == 60 and "amortisation_monthly" not in e

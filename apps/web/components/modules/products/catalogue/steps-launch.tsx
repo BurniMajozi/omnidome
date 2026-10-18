@@ -200,7 +200,7 @@ export function StepReview({ form, preview, products, onLaunch, launching, previ
         <p className="text-xs text-muted-foreground">{[form.category, form.range].filter(Boolean).join(" › ") || "Unclassified"} · {form.nature} · {form.usage}</p>
         <p className="mt-2 text-xs text-muted-foreground">{d.description || "Description required"}</p>
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
-          <div><span className="text-muted-foreground">Price</span><div className="font-medium text-foreground">{Number(d.price) > 0 ? `${money(d.price)}${d.recurring ? " /mo" : ""}` : "Not set"}</div></div>
+          <div><span className="text-muted-foreground">{d.offer.mode === "sold" ? "Price" : "Offered as"}</span><div className="font-medium text-foreground">{d.offer.mode !== "sold" ? ({ given: "Given to customers", asset: "Company asset", rented_in: "Rented in", sold: "" }[d.offer.mode]) : Number(d.price) > 0 ? `${money(d.price)}${d.recurring ? " /mo" : ""}` : "Not set"}</div></div>
           <div><span className="text-muted-foreground">Costs / inclusions</span><div className="font-medium text-foreground">{d.costs.length} lines · {d.components.length} included</div></div>
           <div><span className="text-muted-foreground">Enabled fees</span><div className="font-medium text-foreground">{d.fees.filter((f) => f.enabled).length}</div></div>
         </div>

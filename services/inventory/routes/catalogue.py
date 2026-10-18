@@ -222,6 +222,15 @@ class Provisioning(_Loose):
     notes: str = Field("", max_length=300)
 
 
+class Offer(_Loose):
+    """How the product reaches the customer (or the business) and what owning it costs when it is not sold."""
+    mode: Literal["sold", "given", "asset", "rented_in"] = "sold"      # sold | given away/lent to customers | company asset | rented from a supplier
+    returnable: bool = False                                             # the customer brings it back when they leave
+    life_months: int = Field(0, ge=0, le=600)                            # amortisation life; 0 = not amortised
+    residual_value: Money = Field(Decimal(0), ge=0)                      # expected resale / returned value at the end of that life
+    rental_monthly: Money = Field(Decimal(0), ge=0)                      # rented_in: monthly rent paid to the owner
+
+
 class Definition(_Loose):
     description: str = Field("", max_length=8000)
     customer_name: str = Field("", max_length=200)
@@ -246,6 +255,7 @@ class Definition(_Loose):
     identifiers: list[Literal["Serial number", "MAC address"]] = []
     barcode: Barcode = Barcode()
     provisioning: Provisioning = Provisioning()
+    offer: Offer = Offer()
     research: Research = Research()
     readiness: Readiness = Readiness()
 
@@ -312,6 +322,7 @@ def _catalogue_map(rows: list[CatalogueProduct]) -> dict[str, dict]:
 
 def _serialise(p: CatalogueProduct, catalogue: dict[str, dict], costs_visible: bool, names: Optional[dict] = None) -> dict:
     v = _view(p)
+    v["definition"] = {**Definition().model_dump(mode="json"), **v["definition"]}      # products saved before a field existed still open
     e = rules.economics(v["id"], catalogue, names=names)
     checks = rules.launch_checks(v, catalogue)
     out = {**v, "created_at": p.created_at, "updated_at": p.updated_at, "launched_at": p.launched_at,

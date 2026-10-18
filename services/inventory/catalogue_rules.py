@@ -101,6 +101,16 @@ def effective_costs(d: dict, supplier_id: Optional[str] = None, names: Optional[
     return lines
 
 
+def offer_of(d: dict) -> dict:
+    o = d.get("offer") or {}
+    return {"mode": o.get("mode") or "sold", "returnable": bool(o.get("returnable")), "life_months": int(o.get("life_months") or 0),
+            "residual_value": _d(o.get("residual_value")), "rental_monthly": _d(o.get("rental_monthly"))}
+
+
+def is_sold(d: dict) -> bool:
+    return offer_of(d)["mode"] == "sold"
+
+
 def economics(pid: str, catalogue: dict[str, dict], _seen: Optional[frozenset] = None, supplier_id: Optional[str] = None,
               names: Optional[dict] = None) -> dict:
     """Direct-cost economics of one product, recursing through included components.
@@ -130,6 +140,21 @@ def economics(pid: str, catalogue: dict[str, dict], _seen: Optional[frozenset] =
         complete = complete and e["complete"]
         monthly += e["monthly"] * qty
         upfront += e["upfront"] * qty
+    off = offer_of(d)
+    amortisation = Decimal(0)
+    if off["mode"] != "sold":
+        # Not sold: nothing is billed for the item itself. What it costs the business is spread over its life, or, for a
+        # returnable giveaway with no life, reduced by what we expect to get back.
+        own_up = sum((_d(c.get("amount")) for c in costs if c.get("cadence") != "Monthly"), Decimal(0))
+        own_up_children = upfront - own_up
+        if off["mode"] == "rented_in":
+            monthly += off["rental_monthly"]
+        elif off["life_months"] > 0:
+            amortisation = max(Decimal(0), own_up - off["residual_value"]) / off["life_months"]
+            upfront = own_up_children
+            monthly += amortisation
+        elif off["returnable"]:
+            upfront = max(Decimal(0), upfront - off["residual_value"])
     fee_once = fee_monthly = Decimal(0)
     for f in d.get("fees") or []:
         if f.get("enabled") and f.get("mode") == "Charge":
@@ -138,13 +163,19 @@ def economics(pid: str, catalogue: dict[str, dict], _seen: Optional[frozenset] =
             elif f.get("cadence") == "Monthly":
                 fee_monthly += _d(f.get("amount"))
     recurring = bool(d.get("recurring", True))
-    price = _d(d.get("price"))
+    price = _d(d.get("price")) if off["mode"] == "sold" else Decimal(0)
+    if off["mode"] != "sold":
+        fee_once = fee_monthly = Decimal(0)
     horizon = max(1, int(d.get("term") or 24)) if recurring else 1
     revenue = (price + fee_monthly) * horizon + fee_once if recurring else price + fee_once
     cost = monthly * horizon + upfront
-    return {"complete": complete, "monthly": monthly, "upfront": upfront, "horizon": horizon,
-            "revenue": revenue, "cost": cost, "profit": revenue - cost,
-            "margin_pct": (None if revenue == 0 else round((revenue - cost) / revenue * 100, 2))}
+    out = {"complete": complete, "monthly": monthly, "upfront": upfront, "horizon": horizon,
+           "revenue": revenue, "cost": cost, "profit": revenue - cost,
+           "margin_pct": (None if revenue == 0 else round((revenue - cost) / revenue * 100, 2))}
+    if off["mode"] != "sold":
+        out["amortisation_monthly"] = amortisation
+        out["amortisation_yearly"] = amortisation * 12
+    return out
 
 
 CHANNELS = ("Online storefront", "Field sales", "Call centre", "Partner / reseller", "Retail store")
@@ -266,7 +297,17 @@ def launch_checks(p: dict, catalogue: dict[str, dict]) -> list[dict]:
     add("costs", "Cost sheet complete", e["complete"])
     price = _d(d.get("price"))
     customer_facing = p.get("usage") == "Customer-facing"
-    add("price", "Selling price set", price > 0 or (not d.get("recurring", True) and not customer_facing))
+    sold = is_sold(d)
+    if sold:
+        add("price", "Selling price set", price > 0 or (not d.get("recurring", True) and not customer_facing))
+    else:
+        off = offer_of(d)
+        if off["mode"] == "rented_in":
+            add("price", "Monthly rent set", off["rental_monthly"] > 0, "" if off["rental_monthly"] > 0 else "Enter the monthly rent paid to the owner")
+        elif off["residual_value"] > 0 and off["life_months"] == 0 and not off["returnable"]:
+            add("price", "Value recovery explained", False, "A residual value needs an amortisation life, or mark the item as returnable")
+        else:
+            add("price", "Not sold: no selling price needed", True)
 
     bad_comp = []
     for comp in d.get("components") or []:
@@ -278,7 +319,7 @@ def launch_checks(p: dict, catalogue: dict[str, dict]) -> list[dict]:
     add("components", "Included products are launched and valid", not bad_comp,
         "Not launched or invalid: " + ", ".join(bad_comp) if bad_comp else "")
 
-    if p.get("nature") == "Physical item" and (d.get("stock") or "None") != "None":
+    if p.get("nature") == "Physical item" and (d.get("stock") or "None") != "None" and offer_of(d)["mode"] in ("sold", "given"):
         has = any(s.get("preferred") for s in d.get("sources") or [])
         add("sourcing", "A supplier is set for this stock item", has,
             "" if has else "Add at least one supplier source (in Sourcing & costs) so stock can buy it")
@@ -297,7 +338,8 @@ def launch_checks(p: dict, catalogue: dict[str, dict]) -> list[dict]:
             ("Missing: " + ", ".join(missing)) if missing else (f"{len(bad)} test(s) failed, pending or without tester/date" if bad else ""))
     else:
         reason = (r.get("tests_exempt_reason") or "").strip()
-        add("testing", "Internal testing skipped (reason recorded)", bool(reason), "" if reason else "Record why testing is not needed")
+        add("testing", "Internal testing skipped" + (" (reason recorded)" if sold else ""), bool(reason) or not sold,
+            "" if (reason or not sold) else "Record why testing is not needed")
 
     ic = r.get("icasa") or {}
     required = ic.get("required")
@@ -314,7 +356,8 @@ def launch_checks(p: dict, catalogue: dict[str, dict]) -> list[dict]:
             add("icasa_promotion", "ICASA promotion lodgment", not q, ("Needs: " + ", ".join(q)) if q else "")
     else:
         reason = (ic.get("exempt_reason") or "").strip()
-        add("icasa", "ICASA lodgment not required (reason recorded)", bool(reason), "" if reason else "Record why no lodgment is needed")
+        ok = bool(reason) or not sold
+        add("icasa", "ICASA lodgment not required" + (" (reason recorded)" if sold else ""), ok, "" if ok else "Record why no lodgment is needed")
     return out
 
 
@@ -332,7 +375,7 @@ def launch_effective_date(p: dict) -> Optional[str]:
 
 
 # Fields that change the commercial terms of an active product; these need a revision, not a plain PATCH.
-COMMERCIAL_FIELDS = ("price", "recurring", "term", "costs", "components", "fees", "supplier")
+COMMERCIAL_FIELDS = ("price", "recurring", "term", "costs", "components", "fees", "supplier", "offer")
 ACTIVE_LOCKED_COLUMNS = ("category", "range", "family", "nature", "usage")
 
 
